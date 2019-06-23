@@ -5,25 +5,25 @@
 SWTimer::SWTimer()
 {
   _start = millis();
-  _time = -1;  // temps negatiu indica temporitzador desactivat
+  _time = -1;  // Negative time indicates timer deactivated
 }
 
 
 void SWTimer::timer( bool set, long time )
 {
-  if ( set && _time<0 )
+  if ( set && _time<0 ) //Start timer if not already started
   {
     _start = millis();
     _time = time;
   }
 
-  if ( !set )
+  if ( !set ) //Stop the timer
   {
     _time = -1;
   }
 }
 
-bool SWTimer::value()
+bool SWTimer::value() 
 {
   return _time>=0 && millis()-_start >= (unsigned long)_time ;
 }
