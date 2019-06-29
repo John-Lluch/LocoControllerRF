@@ -7,14 +7,16 @@
 // DEF
 //
 
+
+//Set both master and slave to 0 to disable radio
 #define MASTER 0
 #define SLAVE 0
 
-#define DEBUGA 0
+#define DEBUGA 0  //Debug flag
 
-#define STANDALONE (!MASTER && !SLAVE)
-#define RADIO (MASTER || SLAVE)
-#define SABERTOOTH (STANDALONE || SLAVE)
+#define STANDALONE (!MASTER && !SLAVE)    //Controller runs on local mode (no radio)
+#define RADIO (MASTER || SLAVE)           //Radio is connected to the board
+#define SABERTOOTH (STANDALONE || SLAVE)  //Board is directly connected to a Sabertooth controller
 
 //
 // SABERTOOTH
@@ -35,8 +37,8 @@ USBSabertooth ST(C, 128); // create a Sabertooth
 #define CE_PIN   9
 #define CS_PIN  10
 RF24 radio(CE_PIN, CS_PIN); // create a Radio
-const uint8_t master_address[] = {"mestr"};  // define master address
-const uint8_t slave_address[]  = {"escla"};  // define slave address
+const uint8_t master_address[] = {"mestr"};  // define master identifier
+const uint8_t slave_address[]  = {"escla"};  // define slave identifier
 #endif
 
 //
@@ -189,15 +191,16 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone );
 //RadioMode RadioMode = RadioModeLocal;
 //ConfigMode configMode = ConfigModeSelect;
 
+//SETTINGS MENU
+//TODO: Make this functional
+#define NUMVARS 2   //Define the amount of settings in the menu
+int variable1 = 0;  //First option value
+int variable2 = 0;  //Second option value
 
-#define NUMVARS 2
-int variable1 = 0;
-int variable2 = 0;
+const char *varNames[NUMVARS] = { "Variable1", "Variable2" }; //Option names to show on display
+int *varRefs[NUMVARS] = { &variable1, &variable2 }; //Variable values put together in a table
 
-const char *varNames[NUMVARS] = { "Variable1", "Variable2" };
-int *varRefs[NUMVARS] = { &variable1, &variable2 };
-
-int configVarIndex = 0;
+int configVarIndex = 0; //Highlighted option in the menu
 bool userAction = false;
 
 int freeRAM()
@@ -211,9 +214,10 @@ int freeRAM()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Setup function
 void setup() 
 {
-  delay(500);  // donem un temps al hardware per inicialitzar-se
+  delay(500);  // Wait for some time to initialize hardware
 
 #if DEBUGA
   Serial.begin(9600);
@@ -253,10 +257,10 @@ void setup()
   radio.begin();
   radio.enableAckPayload();          // We will be using the Ack Payload feature, so please enable it
   radio.enableDynamicPayloads();     // Ack payloads are dynamic payloads
-  radio.setRetries( 6, 15 );
-  radio.setPALevel( RF24_PA_LOW );
-  radio.setDataRate( RF24_1MBPS );
-  radio.setChannel( 80 );
+  radio.setRetries( 6, 15 );         // Delay in 250us multiples and retries when connection fails
+  radio.setPALevel( RF24_PA_LOW );   // Using low power amplifier level
+  radio.setDataRate( RF24_1MBPS );   // Using 1MB/s of data rate
+  radio.setChannel( 80 );            // Using channel 80 by default
   #if MASTER
     radio.openWritingPipe(master_address);             // communicate back and forth.  One listens on it, the other talks to it.
     radio.openReadingPipe(1, slave_address);
@@ -273,11 +277,11 @@ void setup()
 //
 
 #ifdef SSD1306AsciiWire_h
-  Wire.setClock( 100000L ); // altres possibilitats son 400000L i 2500000L, pero peten
+  Wire.setClock( 100000L ); // other possibilities are 400000L and 2500000L, but don't work
 #endif
 
 #ifdef SSD1306AsciiAvrI2c_h
-  oled.setI2cClock( 100000L); // altres possibilitats son 400000L i 2500000L, pero peten
+  oled.setI2cClock( 100000L); // other possibilities are 400000L and 2500000L, but don't work
 #endif
 
 #ifdef OLED13
@@ -296,6 +300,7 @@ void setup()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Main loop
 void loop() 
 {
 
@@ -394,6 +399,7 @@ void docommand()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// Turns the LED on and off
 void flashLed()
 {
 //  const long shortTime = 50;
@@ -450,7 +456,7 @@ void readSwitch()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if SABERTOOTH
-
+// Asynchronously reads data from the engine controller
 void readSabertooth()
 {
   int result = 0;
@@ -517,7 +523,7 @@ void readSabertooth()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if MASTER
-
+//Receive orders from the master (RC) unit
 void readFromSlave()
 {
   static SWTimer radioTimer;
@@ -530,14 +536,14 @@ void readFromSlave()
       radio.read(&sd, sizeof(sd));
     
       #if DEBUGA
-      Serial.print("Got Ack paylod from slave");
+      Serial.print("Got Ack payload from slave");
       #endif
     }
 
     radioTimer.timer( !b, 5000 ); 
     bool error = radioTimer.value();
     
-    if ( error == false ) d.radioMode = RadioModeRemote;
+    if ( !error ) d.radioMode = RadioModeRemote;
     else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
   }
 }
@@ -546,18 +552,23 @@ void readFromSlave()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Determines the mode of each component: engine, menu, radio, config and screen.
+//See the list of states for each mode in GLOBAL DEFS section.
 void selectMode()
 {
   userAction = false;
 
-// estats del buto
+// Button states
 
   bool pb = encoder.button();
+  //Button timers: time between first and second push and length of the push
   static SWTimer tempsRepeticio, tempsPuls;
+  //Timer that keeps track of how long the loco has been idle and with no user input
   static SWTimer tempsZeroMarxa;
 
-  static byte finite = 0;
-  static byte preFinite = 0;
+  //Button works using a state machine
+  static byte finite = 0;     //Current input
+  static byte preFinite = 0;  //Previous input
   static bool prePb = false;
   
   bool pbOne, pbOneStrong, pbTime, pbTwo;
@@ -585,14 +596,16 @@ void selectMode()
   }
 
   pbOne = pbOneStrong = pbTime = pbTwo = false;
-  if ( preFinite == 1 && finite == 2 ) pbOne = true;
-  if ( preFinite == 2 && finite == 0 ) pbOneStrong = true;
-  if ( preFinite == 1 && finite == 0 ) pbTime = true;
-  if ( preFinite == 2 && finite == 3 ) pbTwo = true;
+  if ( preFinite == 1 && finite == 2 ) pbOne = true;        // Button has been pushed once and might be pushed again 
+  if ( preFinite == 2 && finite == 0 ) pbOneStrong = true;  // Button has been pushed only once
+  if ( preFinite == 1 && finite == 0 ) pbTime = true;       // Button has been held for some time
+  if ( preFinite == 2 && finite == 3 ) pbTwo = true;        // Button has been pushed twice in succession
 
-  tempsRepeticio.timer( finite == 2, 300 );
-  tempsPuls.timer( finite == 1, 1000 ); 
+  // Start the timers if conditions are met
+  tempsRepeticio.timer( finite == 2, 300 ); // 300ms timer that only starts if there was a previous button input
+  tempsPuls.timer( finite == 1, 1000 ); // 1000ms timer counting the length of the push
   
+  // Save previous state for next iteration
   preFinite = finite;
   prePb = pb;
 
@@ -631,22 +644,24 @@ void selectMode()
 //  }
 //  #endif
 
-// determinem el mode de la aplicació en funcio de les accions de l'usuari
+// Determine the mode according to user actions
 
 
-  if ( remoteSwitch == false ) d.radioMode = RadioModeLocal;
-  else if ( d.radioMode == RadioModeLocal ) d.radioMode = RadioModeRemote;  // preservem el RadioRemoteError si hi era
+  if ( !remoteSwitch ) d.radioMode = RadioModeLocal; // Turn off RC if remoteSwitch flag is off
+  else if ( d.radioMode == RadioModeLocal ) d.radioMode = RadioModeRemote;  // Preserving RadioRemoteError if it existed
 
-  if ( d.mainMode == MainModeConfig )
+  if ( d.mainMode == MainModeConfig ) // Display mode is on config menu
   {
-    if ( d.configMode == ConfigModeSelect )
+    if ( d.configMode == ConfigModeSelect ) // When navigating through the settings menu
     {
+      // Edit the selected option
       if ( pbOne && configVarIndex < NUMVARS ) d.configMode = ConfigModeEdit;
+      // Exit to normal mode if the selected option is the last one
       if ( pbOneStrong && configVarIndex == NUMVARS /*Sortir*/ ) md.motorMode = MotorModeStop, d.mainMode = MainModeDefault;
     }
-    else if ( d.configMode == ConfigModeEdit )
+    else if ( d.configMode == ConfigModeEdit ) // When adjusting a setting
     {
-      if ( pbOne ) d.configMode = ConfigModeSelect;
+      if ( pbOne ) d.configMode = ConfigModeSelect; // Confirm setting and go back to settings menu
     }
   }
 
@@ -671,22 +686,22 @@ void selectMode()
 */
 
 //else if ( MASTER || d.radioMode == RadioModeLocal || d.radioMode == RadioModeRemoteError )
-  else if ( d.mainMode == MainModeDefault ) 
+  else if ( d.mainMode == MainModeDefault ) // Normal operation display
   {
      bool autorize = ( d.radioMode == RadioModeLocal ) || 
           ( MASTER && d.radioMode == RadioModeRemote ) ||
           ( SLAVE  && d.radioMode == RadioModeRemoteError );
   
-    if ( md.motorMode == MotorModeStop )
+    if ( md.motorMode == MotorModeStop )  // If engine mode is neutral:
     {
-      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward;
-      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;
-      if ( pbTime ) d.mainMode = MainModeConfig;
+      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set engine mode to forward if button is pushed once
+      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set engine mode to reverse if button is pushed twice
+      if ( pbTime ) d.mainMode = MainModeConfig;                      // Open up config display if button is pushed and held
     }
     
-    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) )
+    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) ) // If engine mode is not neutral:
     {
-      if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop;
+      if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off engine and set the mode to neutral
     }
   }
 
@@ -696,17 +711,17 @@ void selectMode()
 
   
 
-  tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 20000 );
-  if ( tempsZeroMarxa.value() ) md.motorMode = MotorModeStop;
+  tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 20000 ); // Start 20 second timer for inactivity
+  if ( tempsZeroMarxa.value() ) md.motorMode = MotorModeStop; // Set engine mode to neutral
 
-  if ( finite != 0 ) userAction = true;
+  if ( finite != 0 ) userAction = true; // Action has been performed by the user
 }
 
 
 ////////////////////////////////////////////////////////////////////////////////
 
 #if SLAVE
-
+//Receive data from the master (locomotive)
 void readFromMaster()
 {
   static SWTimer radioTimer;
@@ -719,7 +734,7 @@ void readFromMaster()
       radio.read(&md, sizeof(md));
     
       #if DEBUGA
-      Serial.print("Got paylod from master");
+      Serial.print("Got payload from master");
       #endif
     }
 
@@ -734,12 +749,14 @@ void readFromMaster()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Changes the engine speed according to user input and engine states.
 void selectMotorSpeed()
 {
   /*
   if ( md.mode == ModeStop || md.mode == ModeConfig )
   */
 
+  //Get the amount of steps the wheel has been rotated by the user
   int delta = encoder.delta();
 
 /*
@@ -773,29 +790,30 @@ void selectMotorSpeed()
  
     if ( md.motorMode == MotorModeStop )
     {
-      md.motorSetPoint = 0;
+      md.motorSetPoint = 0; //Shut down the engine
     }  
     
-    else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse )
+    else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When engine is running
     {
       if ( authorize && delta != 0 )
       {
-        md.motorSetPoint = md.motorSetPoint + delta;
-        if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;
-        if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100;
+        md.motorSetPoint = md.motorSetPoint + delta;          //Change the engine speed according to user input
+        if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
+        if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
       }
     }
   }
   
-  if ( delta != 0 ) userAction = true;
+  if ( delta != 0 ) userAction = true; // An action has been performed by the user
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Selects the option in the config menu based on user input.
 void selectConfigValue()
 {
   static SWTimer tempsConfig;
-  
+  //Obtain rotation from the wheel
   int delta = encoder.deltaTick();
 /*  
     if ( md.mode == ModeConfig )
@@ -804,22 +822,23 @@ void selectConfigValue()
   { 
     if ( delta != 0 )
     {
-      if ( d.configMode == ConfigModeSelect )
+      if ( d.configMode == ConfigModeSelect ) //Main options menu
       {
         configVarIndex = configVarIndex + delta;
         if ( configVarIndex < 0 ) configVarIndex = 0;
         if ( configVarIndex > NUMVARS ) configVarIndex = NUMVARS;
       }
-      else if ( d.configMode == ConfigModeEdit )
+      else if ( d.configMode == ConfigModeEdit ) //Option is being edited
       {
         if (configVarIndex < NUMVARS ) 
           *varRefs[configVarIndex] += delta;
       }
     }
   }
-  
-  if ( delta != 0 ) userAction = true;
 
+  if ( delta != 0 ) userAction = true; //An action has been performed by the user
+
+  //Inactivity timer: after 20s exit config mode
   tempsConfig.timer( !userAction && d.mainMode == MainModeConfig, 20000 );
   if ( tempsConfig.value() ) md.motorMode = MotorModeStop, d.mainMode = MainModeDefault;
 }
@@ -827,7 +846,7 @@ void selectConfigValue()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if SABERTOOTH
-
+//Send the specified speed to the Sabertooth controller
 void sendMotorSpeed()
 {
   static int preMotorSetpoint = 0;
@@ -858,7 +877,7 @@ void sendMotorSpeed()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if MASTER
-
+//Send data to slave (RC) device
 void writeToSlave()
 {
   unsigned long now = millis();
@@ -881,7 +900,7 @@ void writeToSlave()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if SLAVE
-
+//Send data to master (loco) device
 void writeToMaster()
 {
   unsigned long now = millis();
@@ -903,6 +922,7 @@ void writeToMaster()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Update the screen based on current mode (default, sleep or config).
 void updateScreenMode()
 {
 
@@ -913,15 +933,17 @@ void updateScreenMode()
   else screenMode = ScreenModeDefault;
 */
 
-  if ( d.mainMode == MainModeConfig ) d.screenMode = ScreenModeConfig;
-  else d.screenMode = ScreenModeDefault;
+  if ( d.mainMode == MainModeConfig ) d.screenMode = ScreenModeConfig; //Change the screen to config menu
+  else d.screenMode = ScreenModeDefault; //Change screen mode to default
 
+  //Inactivity timer that turns off the screen after 120s of inactivity
   sleepTimer.timer( !userAction && md.motorMode == MotorModeStop, 120000 );
   if ( sleepTimer.value() ) d.screenMode = ScreenModeSleep;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Update and refresh the screen.
 void updateDisplay()
 {
 
@@ -929,17 +951,20 @@ void updateDisplay()
   
   bool refresh = (dsp_d.screenMode != d.screenMode);
   dsp_d.screenMode = d.screenMode;
-
+  //Different methods with different modes
   switch ( d.screenMode )
   {
+    //Inactive screen
     case ScreenModeSleep:
       updateDisplaySleep( refresh );
       break;
 
+    //Default screen
     case ScreenModeDefault:
       updateDisplayDefault( refresh );
       break;
 
+    //Options screen
     case ScreenModeConfig:
       updateDisplayConfig( refresh );
       break;
@@ -948,6 +973,7 @@ void updateDisplay()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Clear the screen when entering sleep.
 void updateDisplaySleep( bool refresh )
 {
   if ( refresh )
@@ -958,27 +984,33 @@ void updateDisplaySleep( bool refresh )
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Update the screen when on main UI.
 void updateDisplayDefault( bool refresh )
 {
-
+//---SCREEN POSITIONS FOR EACH ELEMENT---
+//Battery
 #define BATCOL 64
 #define BATROW 0
 
+//Temperatures for both engines
 #define TEMP1COL 0
 #define TEMP1ROW 0
 
+//Engine effective thrust, in percentage
 #define M1COL 0
 #define M1ROW 6
 
 #define M2COL 0
 #define M2ROW 7
 
+//Engine current intensities, in amperes
 #define C1COL 64
 #define C1ROW 6
 
 #define C2COL 64
 #define C2ROW 7
 
+//Amperimeter bars
 #define BAR1COL 112
 #define BAR1ROW 7
 
@@ -991,23 +1023,28 @@ void updateDisplayDefault( bool refresh )
 //#define POTROW 2
 //#define POTSYMROW 4
 
+//Main power indicator
 #define POTCOL 2
 #define POTOFFS 22
 #define POTWIDTH 20
 #define POTROW 2
 #define POTSYMROW 4
 
+//Radio status
 #define RADIOCOL 0// 104
 #define RADIOROW 2
 
+//Icon and unit spacing
 #define ICONGAP 11
 #define UNITGAP 3
 
+  //Clear previous screen
   if ( refresh )
   {
     oled.clear();
   }
 
+  //Draw the new frame's static components
   if ( refresh )
   {
     oled.setFont( Symbol_8x8 );
@@ -1053,6 +1090,7 @@ void updateDisplayDefault( bool refresh )
     oled.print( 'A' );
   }
 
+  //Check radio status
   bool radioChanged = false;
   if ( dsp_d.radioMode != d.radioMode )
   {
@@ -1063,8 +1101,10 @@ void updateDisplayDefault( bool refresh )
   refresh = refresh || (MASTER && radioChanged) ;
   bool showError = MASTER && d.radioMode == RadioModeRemoteError;
 
+  //Draw the new frame's dynamic components
   oled.setFont(System5x7);
   
+  //Temperatures
   if (dsp_sd.temperature1 != sd.temperature1 || dsp_sd.temperature2 != sd.temperature2 || refresh )
   {
     dsp_sd.temperature1 = sd.temperature1;
@@ -1074,6 +1114,7 @@ void updateDisplayDefault( bool refresh )
     else oled_printf( "%02d/%02d", sd.temperature1, sd.temperature2 );
   }
   
+  //Battery voltage
   if (dsp_sd.battery != sd.battery || refresh )
   {
     dsp_sd.battery = sd.battery;
@@ -1108,7 +1149,7 @@ void updateDisplayDefault( bool refresh )
 //  }
 
 
-
+//Engine real power applied
 if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
   {
     dsp_sd.motor1 = sd.motor1;
@@ -1121,7 +1162,8 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     else if ( scaled1 < 100 && scaled2 < 100 ) oled_printf( "%02d/%02d", scaled1, scaled2 );
     else oled.print( "MAXIM" );
   }
-    
+  
+  //Engine 1 current intensity
   if (dsp_sd.current1 != sd.current1 || refresh )
   {
     dsp_sd.current1 = sd.current1;
@@ -1137,21 +1179,23 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     drawBar( BAR1COL, BAR1ROW, 8, 10, scaled );
   }
 
+  //Engine 2 current intensity
   if ( dsp_sd.current2 != sd.current2 || refresh )
   {
     dsp_sd.current2 = sd.current2;
     
     int scaled = abs(sd.current2);
     if ( scaled > 999 ) scaled = 999;
-    
+    //Digits 
     oled.setCursor( C2COL+ICONGAP, C2ROW );
     if ( showError ) oled.print( "--.-" );
     else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
-
+    //Bars
     if ( showError ) scaled = 0;
     drawBar( BAR2COL, BAR2ROW, 8, 10, scaled );
   }
 
+  //Engine steps (in percentage)
   if ( dsp_md.motorSetPoint != md.motorSetPoint || refresh )
   {
     dsp_md.motorSetPoint = md.motorSetPoint; 
@@ -1162,6 +1206,7 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     else oled_printf( "%03d", md.motorSetPoint );
   }
 
+  //Radio status
   if ( radioChanged || refresh )
   {
     char c = ' ';
@@ -1172,6 +1217,7 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     oled.print( c );
   }
   
+  //Engine direction
   if ( dsp_md.motorMode != md.motorMode || refresh )
   {
     dsp_md.motorMode = md.motorMode; 
@@ -1191,9 +1237,10 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Prints the screen when on config mode.
 void updateDisplayConfig( bool refresh )
 {
-
+//Position of the various elements on the screen
 #define NAMESELCOL 0
 #define NAMECOL (NAMESELCOL+8)
 #define NAMEROW 2
@@ -1204,15 +1251,18 @@ void updateDisplayConfig( bool refresh )
 //  refresh = refresh || dsp_back;
 //  dsp_back = false;
 
+  //Clear the previous frame
   if ( refresh )
   {
     oled.clear();
   }
 
+  //Draw the next frame
   oled.setFont(System5x7);
 
   if ( refresh )
   {
+    //Draw the various options names
     for ( int i=0 ; i < NUMVARS ; i++ )
     {
       oled.setCursor( NAMECOL, i+NAMEROW );
@@ -1223,6 +1273,7 @@ void updateDisplayConfig( bool refresh )
     oled.print( "SORTIR" );
   }
   
+  //Draw the current value for each option
   static int dsp_varValues[NUMVARS];
   for ( int i=0 ; i < NUMVARS ; i++ )
   {
@@ -1237,6 +1288,7 @@ void updateDisplayConfig( bool refresh )
   static int dsp_configVarIndex = -1;
   //static int dsp_configMode = ConfigModeNone;
   
+  //Draw the cursor for the highlighted option
   if ( dsp_configVarIndex != configVarIndex || dsp_d.configMode != d.configMode || refresh )
   {
     dsp_configVarIndex = configVarIndex;
@@ -1256,13 +1308,16 @@ void updateDisplayConfig( bool refresh )
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Draws a vertical bar in the specified (col,row) with a predefined number of segments.
 void drawBar( uint8_t col, uint8_t row, uint8_t segments, int maxValue, int value )
 {
   int rawValue = 8L*segments*value/maxValue;
 
+  //Temporarily store the previous font into a constant to revert the font later
   const uint8_t* font = oled.font();
   oled.setFont( Symbol_8x8 );
   
+  //Draw each segment based on the value
   for ( int i=0 ; i<segments ; i++ )
   {
     char segmentValue = '0';
@@ -1279,11 +1334,13 @@ void drawBar( uint8_t col, uint8_t row, uint8_t segments, int maxValue, int valu
     oled.print( segmentValue );
   }
 
+  //Revert the font to its previous charset
   oled.setFont( font );
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
+//Draws a given string using the given format. Replaces the default sprintf
 void oled_printf(const char *format, ...)
 {
   char buf[20];
