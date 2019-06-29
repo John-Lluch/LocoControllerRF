@@ -7,7 +7,7 @@
 // DEF
 //
 
-#define MASTER 1
+#define MASTER 0
 #define SLAVE 0
 
 #define DEBUGA 0
