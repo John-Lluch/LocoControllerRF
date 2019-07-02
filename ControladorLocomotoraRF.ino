@@ -191,13 +191,32 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone );
 //ConfigMode configMode = ConfigModeSelect;
 
 //SETTINGS MENU
-//TODO: Make this functional
-#define NUMVARS 2   //Define the amount of settings in the menu
-int variable1 = 0;  //First option value
-int variable2 = 0;  //Second option value
+//TODO: Save configuration into non-volatile memory
+#define NUMVARS 3   //Define the amount of settings in the menu
 
-const char *varNames[NUMVARS] = { "Variable1", "Variable2" }; //Option names to show on display
-int *varRefs[NUMVARS] = { &variable1, &variable2 }; //Variable values put together in a table
+//Type of the configuration variables
+enum OptionType{
+  OptionTypeNone=0,
+  OptionTypeInt,    //Standard integer
+  OptionTypeRadio,  //Integer with a range of 0-125
+  OptionTypeBool    //Boolean
+};
+
+struct configOption //Data struct for each option
+{
+  OptionType valueType;     //Type of the value
+  int value;                //The value of the option itself, stored in an integer (Use 0 and 1 for boolean)
+  char *description;        //Option description that will show up in the screen, do not make it very long to avoid display issues
+  configOption(OptionType vType, int val, char* desc) : valueType(vType), value(val), description(desc); //Constructor with parameters for the struct
+};
+
+//Declare options
+configOption radioChannel(OptionTypeRadio,80,"Canal radio");
+configOption activeBraking(OptionTypeBool,0,"Fre motor");
+configOption smoothThrottle(OptionTypeBool,0,"Accel. suau");
+
+//Put all options in a table
+const configOption *varList[NUMVARS] = { &radioChannel, &activeBraking, &smoothThrottle };
 
 int configVarIndex = 0; //Highlighted option in the menu
 bool userAction = false;
@@ -254,12 +273,12 @@ void setup()
 
 #if RADIO
   radio.begin();
-  radio.enableAckPayload();          // We will be using the Ack Payload feature, so please enable it
-  radio.enableDynamicPayloads();     // Ack payloads are dynamic payloads
-  radio.setRetries( 6, 15 );         // Delay in 250us multiples and retries when connection fails
-  radio.setPALevel( RF24_PA_LOW );   // Using low power amplifier level
-  radio.setDataRate( RF24_1MBPS );   // Using 1MB/s of data rate
-  radio.setChannel( 80 );            // Using channel 80 by default
+  radio.enableAckPayload();               // We will be using the Ack Payload feature, so please enable it
+  radio.enableDynamicPayloads();          // Ack payloads are dynamic payloads
+  radio.setRetries( 6, 15 );              // Delay in 250us multiples and retries when connection fails
+  radio.setPALevel( RF24_PA_LOW );        // Using low power amplifier level
+  radio.setDataRate( RF24_1MBPS );        // Using 1MB/s of data rate
+  radio.setChannel( radioChannel.value ); // Using channel 80 by default
   #if MASTER
     radio.openWritingPipe(master_address);             // communicate back and forth.  One listens on it, the other talks to it.
     radio.openReadingPipe(1, slave_address);
@@ -549,6 +568,23 @@ void readFromSlave()
 
 #endif
 
+
+////////////////////////////////////////////////////////////////////////////////
+
+//Save and apply the settings
+//TODO: Save configuration into non-volatile memory
+void saveSettings(){
+  #if RADIO
+    //Change radio channel
+    if (int(radio.getChannel()) != radioChannel.value){
+      radio.setChannel(radioChannel.value);
+      #if SLAVE
+        radio.startListening();
+      #endif
+    }
+  #endif
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 //Determines the mode of each component: engine, menu, radio, config and screen.
@@ -656,7 +692,11 @@ void selectMode()
       // Edit the selected option
       if ( pbOne && configVarIndex < NUMVARS ) d.configMode = ConfigModeEdit;
       // Exit to normal mode if the selected option is the last one
-      if ( pbOneStrong && configVarIndex == NUMVARS /*Sortir*/ ) md.motorMode = MotorModeStop, d.mainMode = MainModeDefault;
+      if ( pbOneStrong && configVarIndex == NUMVARS /*Sortir*/ ) {
+        saveSettings();
+        md.motorMode = MotorModeStop; 
+        d.mainMode = MainModeDefault;
+      }
     }
     else if ( d.configMode == ConfigModeEdit ) // When adjusting a setting
     {
@@ -700,7 +740,11 @@ void selectMode()
     
     else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) ) // If engine mode is not neutral:
     {
-      if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off engine and set the mode to neutral
+      if ( (pbOneStrong || pbTwo) && activeBraking.value == 0) md.motorMode = MotorModeStop; // Turn off engine and set the mode to neutral
+      else if ((pbOneStrong || pbTwo) && activeBraking.value == 1) {
+        if (md.motorSetPoint > 0) md.motorSetPoint = 0; //Turn off engine and use its resistance as electric brake
+        else md.motorMode = MotorModeStop; //Change mode to neutral
+      }
     }
   }
 
@@ -758,6 +802,10 @@ void selectMotorSpeed()
   //Get the amount of steps the wheel has been rotated by the user
   int delta = encoder.delta();
 
+  //Timer and target speed for smooth thrust
+  static SWTimer MotorTick;
+  static int targetSpeed = md.motorSetPoint + delta;
+
 /*
   //if ( MASTER || d.radioMode == RadioModeLocal || d.radioMode == RadioModeRemoteError )
   if ( ( d.radioMode == RadioModeLocal ) || 
@@ -794,9 +842,19 @@ void selectMotorSpeed()
     
     else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When engine is running
     {
+      //Change the engine speed according to user input
       if ( authorize && delta != 0 )
       {
-        md.motorSetPoint = md.motorSetPoint + delta;          //Change the engine speed according to user input
+        //Delay the engine throttle when smooth acceleration is on
+        if (smoothThrottle.value == 1 && delta > 0){
+          if ( targetSpeed < 0 ) targetSpeed = 0;     //Avoid underflow
+          if ( targetSpeed > 100 ) targetSpeed = 100; //Avoid overflow
+          //Increase speed by 1 percent every 200ms
+          MotorTick.timer(md.motorSetPoint < targetSpeed, 200);
+          if (MotorTick.value()) md.motorSetPoint++;
+        }
+        else md.motorSetPoint = md.motorSetPoint + delta;          
+
         if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
         if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
       }
@@ -823,14 +881,25 @@ void selectConfigValue()
     {
       if ( d.configMode == ConfigModeSelect ) //Main options menu
       {
-        configVarIndex = configVarIndex + delta;
+        configVarIndex += delta;
         if ( configVarIndex < 0 ) configVarIndex = 0;
         if ( configVarIndex > NUMVARS ) configVarIndex = NUMVARS;
       }
       else if ( d.configMode == ConfigModeEdit ) //Option is being edited
       {
-        if (configVarIndex < NUMVARS ) 
-          *varRefs[configVarIndex] += delta;
+        if (configVarIndex < NUMVARS )
+          if (*varList[configVarIndex].valueType == OptionTypeInt) *varList[configVarIndex].value += delta; //If value is of integer type
+
+          else if (*varList[configVarIndex].valueType == OptionTypeRadio){  //If value is of radio type
+            if (*varList[configVarIndex].value < 0) *varList[configVarIndex].value = 125;
+            else if (*varList[configVarIndex].value > 125) *varList[configVarIndex].value = 0;
+            else *varList[configVarIndex].value += delta;
+          }
+
+          else if (*varList[configVarIndex].valueType == OptionTypeBool){ //If value is of boolean type
+            if (delta > 0) *varList[configVarIndex].value = 1;
+            else if (delta < 0) *varList[configVarIndex].value = 0;
+          }
       }
     }
   }
@@ -1175,7 +1244,7 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
 
     if ( showError ) scaled = 0;
-    drawBar( BAR1COL, BAR1ROW, 8, 10, scaled );
+    drawBar( BAR1COL, BAR1ROW, 8, 50, scaled );
   }
 
   //Engine 2 current intensity
@@ -1191,7 +1260,7 @@ if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
     else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
     //Bars
     if ( showError ) scaled = 0;
-    drawBar( BAR2COL, BAR2ROW, 8, 10, scaled );
+    drawBar( BAR2COL, BAR2ROW, 8, 50, scaled );
   }
 
   //Engine steps (in percentage)
@@ -1265,7 +1334,7 @@ void updateDisplayConfig( bool refresh )
     for ( int i=0 ; i < NUMVARS ; i++ )
     {
       oled.setCursor( NAMECOL, i+NAMEROW );
-      oled.print( varNames[i] );
+      oled.print( *varList[i].description );
     }
   
     oled.setCursor( NAMECOL, NUMVARS+NAMEROW );
@@ -1276,11 +1345,17 @@ void updateDisplayConfig( bool refresh )
   static int dsp_varValues[NUMVARS];
   for ( int i=0 ; i < NUMVARS ; i++ )
   {
-    if ( dsp_varValues[i] != *varRefs[i] || refresh )
+    if ( dsp_varValues[i] != *varList[i].value || refresh )
     {
-      dsp_varValues[i] = *varRefs[i];
+      dsp_varValues[i] = *varList[i].value;
       oled.setCursor( VARCOL, i+NAMEROW );
-      oled_printf( "%04d", *varRefs[i] );
+
+      if (*varList[i].valueType == OptionTypeInt || *varList[i].valueType == OptionTypeRadio) oled_printf( "%04d", *varList[i].value );
+
+      else if (*varList[i].valueType == OptionTypeBool) {
+        if (*varList[i].value == 0) oled.print(" Off");
+        else oled.print("  On");
+      }
     }
   }
 
