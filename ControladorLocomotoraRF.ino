@@ -7,8 +7,9 @@
 // DEF
 //
 
+
 //Set both master and slave to 0 to disable radio
-#define MASTER 1
+#define MASTER 0
 #define SLAVE 0
 
 #define DEBUGA 0  //Debug flag
