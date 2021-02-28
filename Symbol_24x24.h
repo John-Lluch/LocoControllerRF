@@ -1,12 +1,26 @@
 #ifndef SYMBOL_24x24_H
 #define SYMBOL_24x24_H
 
+// Icon patterns were made with
+// https://fontstruct.com
+
 GLCDFONTDECL(Symbol_24x24) = {
     0x0, 0x1, // size of one indicates fixed font width and no pixel padding
     24, // width
     24, // height
     '0', // first char
     3, // char count
+
+
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,
+//    0,0,0,0,0,0,0,0,  // 47 '/' (empty)
 
     0b00000000,0b10000000,0b11000000,0b11100000,0b11110000,0b11111000,0b11111100,0b11111100,
     0b11111100,0b11111100,0b11111100,0b11111100,0b11111100,0b11111100,0b11111100,0b11111100,

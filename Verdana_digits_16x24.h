@@ -35,6 +35,9 @@ row
  *                  // bit field of all characters
  */
 
+// Icon patterns were made with
+// https://fontstruct.com
+
 #ifndef VERDANA16x24_H
 #define VERDANA16x24_H
 

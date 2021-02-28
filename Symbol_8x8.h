@@ -1,12 +1,15 @@
 #ifndef SYMBOL_8x8_H
 #define SYMBOL_8x8_H
 
+// Icon patterns were made with
+// https://fontstruct.com
+
 GLCDFONTDECL(Symbol_8x8) = {
     0x0, 0x1, // size of one indicates fixed font width and no pixel padding
     8,   // width
     8,   // height
     ' ', // first char
-    32,  // char count
+    34,  // char count
 
 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,  // <space>
 0x00,0x00,0x00,0x00,0x5F,0x00,0x00,0x00,  // !
@@ -36,12 +39,13 @@ GLCDFONTDECL(Symbol_8x8) = {
 0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,  // 8   // bar
 0x0C,0x52,0x52,0x52,0x52,0x3C,0x00,0x00,  // 9
 0b00000000,0b00100000,0b01110000,0b01111111,0b01110101,0b00100000,0b00000000,0b00000000,  // :   // termometer
-0x3E,0x22,0x22,0x22,0x22,0x22,0x22,0x1C,  // ;   // battery
-//0x00,0x00,0x10,0x28,0x44,0x00,0x00,0x00,  // <   //  cross
-0b01000001,0b00100010,0b00010100,0b00001000,0b00010100,0b00100010,0b01000001,0b00000000,  // <   //  cross
+0b00111110,0b00100011,0b00100010,0b00100010,0b00100010,0b00100010,0b00100011,0b00111110,  // ;   // loco battery
+0b01000001,0b00100010,0b00010100,0b00001000,0b00010100,0b00100010,0b01000001,0b00000000,  // <   // cross
 0b00010100,0b00011100,0b01110111,0b00100010,0b01110111,0b00011100,0b00010100,0b00000000,  // =   // motor
 0b01100000,0b00000000,0b01110000,0b00000000,0b01111000,0b00000000,0b01111110,0b00000000,  // >   // radio
 0x10,0x08,0x04,0x18,0x20,0x10,0x08,0x00,  // ?   // current
+0b00111110,0b00100010,0b00100010,0b00100010,0b00100010,0b00100010,0b00100010,0b00011100,  // @   // remote battery
+0b00111110,0b00100010,0b00100010,0b00101100,0b00011010,0b00100010,0b00100010,0b00011100,  // A   // remote battery charging
 };
 
 #endif

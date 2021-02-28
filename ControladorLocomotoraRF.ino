@@ -8,15 +8,15 @@
 //
 
 
-//Set both master and slave to 0 to disable radio
-#define MASTER 0
-#define SLAVE 1
+//Set both remote and locomotive to 0 to disable radio
+#define REMOTE 0
+#define LOCOMOTIVE 1
 
 #define DEBUGA 0  //Debug flag
 
-#define STANDALONE (!MASTER && !SLAVE)    //Controller runs on local mode (no radio)
-#define RADIO (MASTER || SLAVE)           //Radio is connected to the board
-#define SABERTOOTH (STANDALONE || SLAVE)  //Board is directly connected to a Sabertooth controller
+#define STANDALONE (!REMOTE && !LOCOMOTIVE)    //Controller runs on local mode (no radio)
+#define RADIO (REMOTE || LOCOMOTIVE)           //Radio is connected to the board
+#define SABERTOOTH (STANDALONE || LOCOMOTIVE)  //Board is directly connected to a Sabertooth controller
 
 //
 // SABERTOOTH
@@ -37,8 +37,9 @@ USBSabertooth ST(C, 128); // create a Sabertooth
 #define CE_PIN   9
 #define CS_PIN  10
 RF24 radio(CE_PIN, CS_PIN); // create a Radio
-const uint8_t master_address[] = {"mestr"};  // define master identifier
-const uint8_t slave_address[]  = {"escla"};  // define slave identifier
+const uint8_t remote_address[] = {"remot"};  // define remote identifier
+const uint8_t locomotive_address1[]  = {"loco1"};  // define locomotive identifier
+const uint8_t locomotive_address2[]  = {"loco2"};  // define locomotive identifier
 #endif
 
 //
@@ -91,6 +92,15 @@ SSD1306AsciiWire oled;   // create a display
 #define IOPIN1 5
 
 //
+// CHARGER
+//
+
+#define BATTCHARGEPIN A7
+#define CHARGERPLUGPIN A8
+#define BATTCHECKPIN 7
+#define BATTCHARGERPIN 8
+
+//
 //  ENCODER
 //
 
@@ -106,7 +116,7 @@ Encoder encoder( pinA, pinB, pinP );   // create an encoder
 //  SWITCH
 //
 
-#define SWPIN 6
+#define SWPIN 7
 bool remoteSwitch = false;
 
 //
@@ -164,19 +174,19 @@ enum ScreenMode
   ScreenModeConfig
 };
 
-struct MasterData
+struct RemoteData
 {
   int motorSetPoint;
   MotorMode motorMode;
   byte io0;
   byte io1;
-  MasterData(byte b, MotorMode m) { memset( this, b, sizeof(*this) ); motorMode=m; }
+  RemoteData(byte b, MotorMode m) { memset( this, b, sizeof(*this) ); motorMode=m; }
 };
 
-MasterData md(0,MotorModeStop);
-MasterData dsp_md(0xff,MotorModeNone);
+RemoteData md(0,MotorModeStop);
+RemoteData dsp_md(0xff,MotorModeNone);
 
-struct SlaveData
+struct LocomotiveData
 {
   int battery;
   int motor1;
@@ -185,11 +195,11 @@ struct SlaveData
   int current2;
   int temperature1;
   int temperature2;
-  SlaveData(byte b) { memset( this, b, sizeof(*this) ); } 
+  LocomotiveData(byte b) { memset( this, b, sizeof(*this) ); } 
 };
 
-SlaveData sd(0);
-SlaveData dsp_sd(0xff);
+LocomotiveData sd(0);
+LocomotiveData dsp_sd(0xff);
 
 struct SelfData
 {
@@ -197,11 +207,14 @@ struct SelfData
   RadioMode radioMode;
   ConfigMode configMode;
   ScreenMode screenMode;
-  SelfData( MainMode mm, RadioMode sm, ConfigMode cm, ScreenMode scm ) : mainMode(mm), radioMode(sm), configMode(cm), screenMode(scm) {};
+  int battCharge;  // only used for remote
+  bool battIsCharging; // only used for remote
+  SelfData( MainMode mm, RadioMode sm, ConfigMode cm, ScreenMode scm, int batt, bool isCharging ) : 
+    mainMode(mm), radioMode(sm), configMode(cm), screenMode(scm), battCharge(batt), battIsCharging(isCharging) {};
 };
 
-SelfData d( MainModeDefault, RadioModeLocal, ConfigModeSelect, ScreenModeDefault );
-SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone );
+SelfData d( MainModeDefault, RadioModeLocal, ConfigModeSelect, ScreenModeDefault, 100, false );
+SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100, false );
 
 
 //SETTINGS MENU
@@ -267,7 +280,6 @@ void setup()
 //
 // EEPROM
 //
-
   loadSettings();
   
 //
@@ -278,33 +290,37 @@ void setup()
 //
 // IO
 //
-
-#if MASTER
+#if REMOTE
   pinMode( IOPIN0, INPUT_PULLUP ); 
   pinMode( IOPIN1, INPUT_PULLUP ); 
-#elif SLAVE
+#elif LOCOMOTIVE
   pinMode( IOPIN0, OUTPUT ); 
   pinMode( IOPIN1, OUTPUT ); 
 #endif
 
 //
+// CHARGER
+//
+#if REMOTE
+  pinMode( BATTCHARGEPIN, INPUT );
+  pinMode( CHARGERPLUGPIN, INPUT );
+  pinMode( BATTCHECKPIN, OUTPUT );
+  pinMode( BATTCHARGERPIN, INPUT );
+#endif
+
+//
 // SWITCH
 //
-  
   pinMode( SWPIN, INPUT_PULLUP );
 
-
-  
 //
 // ENCODER
 //
-
   EncoderInterrupt.begin( &encoder );
 
 //
 // SABERTOOTH
 //
-
 #if SABERTOOTH
    SabertoothTXPinSerial.begin(9600);
    C.setPollInterval(20);
@@ -314,7 +330,6 @@ void setup()
 //
 // RADIO
 //
-
 #if RADIO
   radio.begin();
   radio.enableAckPayload();          // We will be using the Ack Payload feature, so please enable it
@@ -323,13 +338,14 @@ void setup()
   radio.setPALevel( RF24_PA_LOW );   // Using low power amplifier level
   radio.setDataRate( RF24_1MBPS );   // Using 1MB/s of data rate
   radio.setChannel( radioChannel.value );            // Using channel 80 by default
-  #if MASTER
-    radio.openWritingPipe(master_address);             // communicate back and forth.  One listens on it, the other talks to it.
-    radio.openReadingPipe(1, slave_address);
-  #elif SLAVE
-    radio.openWritingPipe(slave_address);
-    radio.openReadingPipe(1, master_address);
+  #if REMOTE
+    radio.openWritingPipe(remote_address);             // communicate back and forth. Remote listens, Locomotive talks.
+    radio.openReadingPipe(1, locomotive_address1);      // see starping example for multiple reading pipes (1 through 5 )
+    //radio.openReadingPipe(2, locomotive_address2);    // TO DO : uncomment and find a way to set it for double traction
     radio.startListening();
+  #elif LOCOMOTIVE
+    radio.openWritingPipe(locomotive_address1);        // TO DO: find a way to set the right locomotive in case of double traction
+    radio.openReadingPipe(1, remote_address);          // use pipe 1 for reading from the remote
   #endif
 
 #endif
@@ -337,7 +353,6 @@ void setup()
 //
 // DISPLAY
 //
-
 #ifdef SSD1306AsciiWire_h
   Wire.setClock( 100000L ); // other possibilities are 400000L and 2500000L, but don't work
 #endif
@@ -373,22 +388,27 @@ void loop()
   flashLed();
   readSwitch();
 
-  #if MASTER
+  #if REMOTE
+    readBatteryCharge();
+    readChargeStatus();
+  #endif
+
+  #if REMOTE
     inputIO();
-  #elif SLAVE
+  #elif LOCOMOTIVE
     outputIO();
   #endif
 
   #if SABERTOOTH 
     readSabertooth();
-  #elif MASTER
-    readFromSlave();
+  #elif REMOTE
+    readFromLocomotive();
   #endif
 
   selectMode();
   
-  #if SLAVE
-    readFromMaster();
+  #if LOCOMOTIVE
+    readFromRemote();
   #endif  
   
   selectMotorSpeed();
@@ -396,12 +416,12 @@ void loop()
 
   #if SABERTOOTH
     sendMotorSpeed();
-  #elif MASTER
-    writeToSlave();
+  #elif REMOTE
+    writeToLocomotive();
   #endif
 
-  #if SLAVE
-    writeToMaster();
+  #if LOCOMOTIVE
+    writeToRemote();
   #endif
   
   updateScreenMode();
@@ -501,7 +521,6 @@ void loadSettings()
 }
 
 
-
 ////////////////////////////////////////////////////////////////////////////////
 
 // Turns the LED on and off
@@ -512,7 +531,7 @@ void flashLed()
 
   
   const long shortTime = 150;
-  const long longTime = 1850;
+  const long longTime = 2000-shortTime;
 
 /*
   const long mildTime = 200;
@@ -546,22 +565,68 @@ void flashLed()
 
 void readSwitch()
 {
-  #if SLAVE
+  #if LOCOMOTIVE
       static Debouncer swDebouncer;
-      bool b = digitalRead( SWPIN );
+      bool b = digitalRead( SWPIN ); // will read 1 if nothing is connected
       if (swDebouncer.isDebounced( b, 3 )) remoteSwitch = b;
      
-  #elif MASTER
+  #elif REMOTE
      remoteSwitch = true;
-  #else
+     
+  #else // neither remote or locomotive
      remoteSwitch = false;
   #endif
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+#if REMOTE
+void  readBatteryCharge()
+{
+  const long shortTime = 50;
+  const long longTime = 5000-shortTime;
+  
+  unsigned long now = millis();
+  static unsigned long start = now;
+
+  bool b0 = now - start > (unsigned long)longTime;
+  bool b1 = now - start > (unsigned long)(longTime+shortTime);
+
+  // send out signal to read battery for a short limited time
+  digitalWrite( BATTCHECKPIN, b0 ); 
+
+  // read battery voltage and update timer
+  if ( b1 ) 
+  {
+     int rawCharge = analogRead( BATTCHARGEPIN );
+     const int maxRawCharge = 330;   // this is about an input of  1.1v -> 1.1/3.3 * 1024 = 341 -> 
+     const int minRawCharge = 280;   // this is about an input of  0.9v -> 0.9/3.3 * 1024 = 279
+     if (rawCharge > maxRawCharge) rawCharge = maxRawCharge;
+     if (rawCharge < minRawCharge) rawCharge = minRawCharge;
+     int percentCharge = (rawCharge-minRawCharge)*100L/(maxRawCharge-minRawCharge);
+     if (percentCharge < d.battCharge) d.battCharge = (d.battCharge*80L + percentCharge*20L)/100;
+     else d.battCharge = percentCharge;
+     start = now;
+  }
+}
+#endif
+
+#if REMOTE
+void readChargeStatus()
+{
+  static SWTimer chargeTimer;
+  
+  int b = (analogRead( CHARGERPLUGPIN ) > 300);
+
+  chargeTimer.timer( b, 1000 );
+  d.battIsCharging = chargeTimer.value();
+}
+#endif
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if MASTER
+#if REMOTE
 void inputIO()
 {
   static Debouncer swDebouncer0, swDebouncer1;
@@ -578,13 +643,14 @@ void inputIO()
 }
 #endif
 
-#if SLAVE
+#if LOCOMOTIVE
 void outputIO()
 { 
   digitalWrite( IOPIN0, md.io0 );
   digitalWrite( IOPIN1, md.io1 );
 }
 #endif
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -653,35 +719,74 @@ void readSabertooth()
 
 #endif
 
+
 ////////////////////////////////////////////////////////////////////////////////
 
-#if MASTER
-//Receive orders from the master (RC) unit
-void readFromSlave()
+#if LOCOMOTIVE
+// Receive orders from the remote (RC) unit through ack payload
+void readFromRemote()
 {
   static SWTimer radioTimer;
-  
+  static SWKeep radioOk;
+
   if ( d.radioMode == RadioModeRemote || d.radioMode == RadioModeRemoteError )
   {
     bool b = radio.available();
     if ( b )
     { 
-      radio.read(&sd, sizeof(sd));
+      radio.read(&md, sizeof(md));
     
       #if DEBUGA
-      Serial.print("Got Ack payload from slave");
+      Serial.println("Got Ack payload from remote");
       #endif
     }
 
-    radioTimer.timer( !b, 5000 ); 
-    bool error = radioTimer.value();
+    radioTimer.timer( !b, 3000 );
     
-    if ( !error ) d.radioMode = RadioModeRemote;
+    if ( radioOk.keep( b, radioTimer.value() ) ) d.radioMode = RadioModeRemote;
     else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
   }
 }
 
 #endif
+
+
+////////////////////////////////////////////////////////////////////////////////
+
+#if REMOTE
+//Receive data from the locomotive (Locomotive)
+void readFromLocomotive()
+{
+  static SWTimer radioTimer;
+  static SWKeep radioOk;
+  
+  if ( d.radioMode == RadioModeRemote || d.radioMode == RadioModeRemoteError )
+  {
+    uint8_t pipeNum;
+    bool b = radio.available( &pipeNum );
+    if ( b )
+    { 
+      radio.read(&sd, sizeof(sd));  // TO DO : use pipeNum to account for locomotive display data
+    
+      #if DEBUGA
+      Serial.print("Got payload from locomotive from pipe:");
+      Serial.println( pipeNum );
+      #endif
+    }
+
+    radioTimer.timer( !b, 3000 );
+    
+    // bool error = radioTimer.value();
+//    if ( !error ) d.radioMode = RadioModeRemote;
+//    else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
+    
+    if ( radioOk.keep( b, radioTimer.value() ) ) d.radioMode = RadioModeRemote;
+    else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
+  }
+}
+
+#endif
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -779,8 +884,8 @@ void selectMode()
 
 // Determine the mode according to user actions
 
-  if ( !remoteSwitch ) d.radioMode = RadioModeLocal; // Turn off RC if remoteSwitch flag is off
-  else if ( d.radioMode == RadioModeLocal ) d.radioMode = RadioModeRemote;  // Preserving RadioRemoteError if it existed
+  if ( !remoteSwitch || d.battIsCharging ) d.radioMode = RadioModeLocal, md.motorMode = MotorModeStop; // Turn off RC if remoteSwitch flag is off or battery is charging
+  else if ( d.radioMode == RadioModeLocal ) d.radioMode = RadioModeRemoteError;  // Preserving RadioRemote if it existed, otherwise start with error
 
   if ( d.mainMode == MainModeConfig ) // Display mode is on config menu
   {
@@ -804,9 +909,9 @@ void selectMode()
 
   else if ( d.mainMode == MainModeDefault ) // Normal operation display
   {
-     bool autorize = ( d.radioMode == RadioModeLocal ) || 
-          ( MASTER && d.radioMode == RadioModeRemote ) ||
-          ( SLAVE  && d.radioMode == RadioModeRemoteError );
+     bool autorize = 
+          ( REMOTE && d.radioMode == RadioModeRemote ) ||
+          ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
   
     if ( md.motorMode == MotorModeStop )  // If motor mode is neutral:
     {
@@ -831,35 +936,6 @@ void selectMode()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if SLAVE
-// Receive data from the master (locomotive)
-void readFromMaster()
-{
-  static SWTimer radioTimer;
-
-  if ( d.radioMode == RadioModeRemote || d.radioMode == RadioModeRemoteError )
-  {
-    bool b = radio.available();
-    if ( b )
-    { 
-      radio.read(&md, sizeof(md));
-    
-      #if DEBUGA
-      Serial.print("Got payload from master");
-      #endif
-    }
-
-    radioTimer.timer( !b, 5000 );
-    bool error = radioTimer.value();
-    if ( error == false ) d.radioMode = RadioModeRemote;
-    else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
-  }
-}
-
-#endif
-
-////////////////////////////////////////////////////////////////////////////////
-
 // Changes the motor speed according to user input and motor states.
 void selectMotorSpeed()
 {
@@ -868,9 +944,9 @@ void selectMotorSpeed()
 
   if ( d.mainMode == MainModeDefault )
   { 
-    bool authorize = ( d.radioMode == RadioModeLocal ) || 
-          ( MASTER && d.radioMode == RadioModeRemote ) ||
-          ( SLAVE  && d.radioMode == RadioModeRemoteError );
+    bool authorize =
+          ( REMOTE && d.radioMode == RadioModeRemote ) ||
+          ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
  
     if ( md.motorMode == MotorModeStop )
     {
@@ -946,6 +1022,7 @@ void selectConfigValue()
   if ( tempsConfig.value() ) md.motorMode = MotorModeStop, d.mainMode = MainModeDefault;
 }
 
+
 ////////////////////////////////////////////////////////////////////////////////
 
 #if SABERTOOTH
@@ -976,23 +1053,24 @@ void sendMotorSpeed()
 
 #endif
 
+
 ////////////////////////////////////////////////////////////////////////////////
 
-#if MASTER
-// Send data to slave (RC) device
-void writeToSlave()
+#if LOCOMOTIVE
+// Send data to remote (RC) device
+void writeToRemote()
 {
   unsigned long now = millis();
   static unsigned long then = 0;
-  if ( now - then  > 50 )
+  if ( now - then  > 100 )
   {
     then = now;
 
     #if DEGUGA
-    Serial.print( "Now sending to Slave");
+    Serial.println( "Now sending to Remote");
     #endif
     
-    radio.writeFast(  &md, sizeof(md), 0 ) ;
+    radio.writeFast(  &sd, sizeof(sd), false ) ; // request ack
     radio.txStandBy();
   }
 }
@@ -1001,9 +1079,9 @@ void writeToSlave()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if SLAVE
-// Send data to master (loco) device
-void writeToMaster()
+#if REMOTE
+// Send commands to locomotive (Locomotive) device as an ack payload
+void writeToLocomotive()
 {
   unsigned long now = millis();
   static unsigned long then = 0;
@@ -1012,15 +1090,16 @@ void writeToMaster()
     then = now;
     
     radio.flush_tx();
-    radio.writeAckPayload( 1, &sd, sizeof(sd) );    
+    radio.writeAckPayload( 1, &md, sizeof(md) );    
     
     #if DEGUGA
-    Serial.print( "Wrote ack payload for Master");
+    Serial.println( "Wrote ack payload for Locomotive");
     #endif
   }
 }
 
 #endif
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1075,37 +1154,41 @@ void updateDisplaySleep( bool refresh )
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
 // Updates the default mode screen.
 void updateDisplayDefault( bool refresh )
 {
 //---SCREEN POSITIONS FOR EACH ELEMENT---
-//Battery
+
+// Locomotive Battery
+#if REMOTE
+#define BATCOL 0
+#define BATROW 6
+#else
 #define BATCOL 64
 #define BATROW 0
+#endif
+
+// Remote Battery
+#define BATCHARGCOL 70
+#define BATCHARGROW 0
 
 //Temperatures for both motor drivers
 #define TEMP1COL 0
 #define TEMP1ROW 0
 
 //Motor effective thrust, in percentage
-#define M1COL 0
-#define M1ROW 6
-
 #define M2COL 0
 #define M2ROW 7
 
 //Motor currents, in amperes
 #define C1COL 64
 #define C1ROW 6
-
 #define C2COL 64
 #define C2ROW 7
 
 //Amperimeter bars
 #define BAR1COL 112
 #define BAR1ROW 7
-
 #define BAR2COL 120
 #define BAR2ROW 7
 
@@ -1128,48 +1211,8 @@ void updateDisplayDefault( bool refresh )
   if ( refresh )
   {
     oled.clear();
-  }
-
-  //Draw the new frame's static components
-  if ( refresh )
-  {
-    oled.setFont( Symbol_8x8 );
-
-    oled.setCursor( TEMP1COL, TEMP1ROW );
-    oled.print ( ':' );   
-    
-    oled.setCursor( BATCOL, BATROW );
-    oled.print ( ';' );
-    
-    oled.setCursor( M2COL, M2ROW );
-    oled.print ( '=' );
-
-    oled.setCursor( C1COL, C1ROW );
-    oled.print ( '?' );
-    
-    oled.setCursor( C2COL, C2ROW );
-    oled.print ( '?' );
-
-    oled.setFont( System5x7 );
-    oled.setCursor( POTCOL+POTWIDTH+POTOFFS+UNITGAP+17*3, POTSYMROW);
-    oled.print ( '%' );
-    
-    oled.setCursor( TEMP1COL+ICONGAP+UNITGAP+5*6, TEMP1ROW );
-    oled.print( 'C' );
-
-    oled.setCursor( BATCOL+ICONGAP+UNITGAP+4*6, BATROW );
-    oled.print( 'V' );
-
-    oled.setCursor( M2COL+ICONGAP+UNITGAP+5*6, M2ROW );
-    oled.print( '%' );
-
-    oled.setCursor( C1COL+ICONGAP+UNITGAP+4*6, C1ROW );
-    oled.print( 'A' );
-
-    oled.setCursor( C2COL+ICONGAP+UNITGAP+4*6, C2ROW );
-    oled.print( 'A' );
-  }
-
+  }  
+  
   //Check radio status
   bool radioChanged = false;
   if ( dsp_d.radioMode != d.radioMode )
@@ -1178,116 +1221,489 @@ void updateDisplayDefault( bool refresh )
     radioChanged = true;
   }
 
-  refresh = refresh || (MASTER && radioChanged) ;
-  bool showError = MASTER && d.radioMode == RadioModeRemoteError;
+  refresh = refresh || (REMOTE && radioChanged) ;
+  bool showError = REMOTE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal);
 
-  //Draw the new frame's dynamic components
-  oled.setFont(System5x7);
-  
-  //Temperatures
-  if (dsp_sd.temperature1 != sd.temperature1 || dsp_sd.temperature2 != sd.temperature2 || refresh )
+  // Charge levelis always displayed
+  #if REMOTE
+
+  if (dsp_d.battIsCharging != d.battIsCharging || refresh )
   {
-    dsp_sd.temperature1 = sd.temperature1;
-    dsp_sd.temperature2 = sd.temperature2;
-    oled.setCursor( TEMP1COL+ICONGAP, TEMP1ROW );
-    if ( showError ) oled.print( "--/--" );
-    else oled_printf( "%02d/%02d", sd.temperature1, sd.temperature2 );
-  }
-  
-  //Battery voltage
-  if (dsp_sd.battery != sd.battery || refresh )
-  {
-    dsp_sd.battery = sd.battery;
-    oled.setCursor( BATCOL+ICONGAP, BATROW );
-    if ( showError ) oled.print( "--.-" );
-    else oled_printf( "%02d.%01d", sd.battery/10, sd.battery%10 );   
-  }
-
-  //Motor speed
-  if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
-  {
-    dsp_sd.motor1 = sd.motor1;
-    dsp_sd.motor2 = sd.motor2;
-
-    int scaled1 = (abs(sd.motor1)*100L+1024)/2047;
-    int scaled2 = (abs(sd.motor2)*100L+1024)/2047;
-    oled.setCursor( M2COL+ICONGAP, M2ROW );
-    if ( showError ) oled.print( "--/--" );
-    else if ( scaled1 < 100 && scaled2 < 100 ) oled_printf( "%02d/%02d", scaled1, scaled2 );
-    else oled.print( "MAXIM" );
-  }
-  
-  //Motor 1 current
-  if (dsp_sd.current1 != sd.current1 || refresh )
-  {
-    dsp_sd.current1 = sd.current1;
-
-    int scaled = abs(sd.current1); // abs(current1)*1000L/2047;
-    if ( scaled > 999 ) scaled = 999;
-           
-    oled.setCursor( C1COL+ICONGAP, C1ROW );
-    if ( showError ) oled.print( "--.-" );
-    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
-
-    if ( showError ) scaled = 0;
-    drawBar( BAR1COL, BAR1ROW, 8, 10*maxCurrentDisplay.value, scaled );
-  }
-
-  //Motor 2 current
-  if ( dsp_sd.current2 != sd.current2 || refresh )
-  {
-    dsp_sd.current2 = sd.current2;
-    
-    int scaled = abs(sd.current2);
-    if ( scaled > 999 ) scaled = 999;
-    //Digits 
-    oled.setCursor( C2COL+ICONGAP, C2ROW );
-    if ( showError ) oled.print( "--.-" );
-    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
-    //Bars
-    if ( showError ) scaled = 0;
-    drawBar( BAR2COL, BAR2ROW, 8, 10*maxCurrentDisplay.value, scaled );
-  }
-
-  //Motor speed set point (in percentage)
-  if ( dsp_md.motorSetPoint != md.motorSetPoint || refresh )
-  {
-    dsp_md.motorSetPoint = md.motorSetPoint; 
-    
-    oled.setFont(Verdana_digits_16x24);
-    oled.setCursor( POTCOL+POTWIDTH+POTOFFS, POTROW );
-    if ( showError ) oled.print( "==:" );
-    else oled_printf( "%03d", md.motorSetPoint );
-  }
-
-  //Radio status
-  if ( radioChanged || refresh )
-  {
-    char c = ' ';
-    if ( d.radioMode == RadioModeRemote ) c = '>';
-    else if ( d.radioMode == RadioModeRemoteError ) c = '<';
+    dsp_d.battIsCharging = d.battIsCharging;
     oled.setFont(Symbol_8x8);
-    oled.setCursor( RADIOCOL, RADIOROW );
-    oled.print( c );
+    oled.setCursor( BATCHARGCOL, BATCHARGROW );
+    oled.print ( d.battIsCharging ? 'A' : '@' );
   }
   
-  //Motor direction
-  if ( dsp_md.motorMode != md.motorMode || refresh )
+  if (dsp_d.battCharge != d.battCharge || refresh )
   {
-    dsp_md.motorMode = md.motorMode; 
-    
-    char status = '0';
-    switch ( md.motorMode )
+    dsp_d.battCharge = d.battCharge;
+    oled.setFont(System5x7);
+    oled.setCursor( BATCHARGCOL+ICONGAP, BATCHARGROW );
+    oled_printf( "%3d", d.battCharge );
+  } 
+  #endif
+
+  if ( showError )
+  {
+    if ( refresh )
     {
-      case MotorModeForward : status = '1'; break;
-      case MotorModeReverse : status = '2'; break;
-    }
+      // clear specific display sections
+      oled.setFont( Symbol_8x8 );
+      oled.clearField( TEMP1COL, TEMP1ROW, 8);
+
+      oled.setCursor( BATCOL, BATROW );
+      oled.clearToEOL();
     
-    oled.setFont(Symbol_24x24);
-    oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
-    oled.print( status );
+      oled.setCursor( M2COL, M2ROW );
+      oled.clearToEOL();
+
+      oled.clearField( POTCOL+POTWIDTH+POTOFFS+UNITGAP+17*3, POTSYMROW, 1); // note that this will clear a 8x8 area for a 5x7 character
+      
+      //Radio status
+      if ( radioChanged || refresh )
+      {  
+        oled.setCursor( RADIOCOL, RADIOROW );
+        oled.print( d.radioMode == RadioModeRemoteError ? '<' : ' '  );
+      }
+      
+      // clear stop icon
+      if ( REMOTE && (radioChanged || refresh) )
+      {
+        oled.setFont(Symbol_24x24);
+        if (d.radioMode == RadioModeLocal ) oled.clearField( POTCOL+POTWIDTH/2, POTROW, 1 ); // this clears the stop icon
+        if (d.radioMode == RadioModeRemoteError )
+        {
+          oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
+          oled.print( '0' ); // this displays a stop icon
+        }
+      }
+      
+      // clear bars
+      drawBar( BAR1COL, BAR1ROW, 8, 100, 0 );
+      drawBar( BAR2COL, BAR2ROW, 8, 100, 0 );
+
+      // display train set
+      oled.setFont(Verdana_digits_16x24);
+      oled.setCursor( POTCOL+POTWIDTH+POTOFFS, POTROW );
+      oled.print( "==:" ); // this displays a train set
+    }
+  }
+  else
+  {
+    if ( refresh )
+    {
+      //Draw the new frame static components
+      oled.setFont( Symbol_8x8 );
+
+      oled.setCursor( TEMP1COL, TEMP1ROW );
+      oled.print ( ':' );   
+    
+      oled.setCursor( BATCOL, BATROW );
+      oled.print ( ';' );
+ 
+      oled.setCursor( M2COL, M2ROW );
+      oled.print ( '=' );
+
+      oled.setCursor( C1COL, C1ROW );
+      oled.print ( '?' );
+    
+      oled.setCursor( C2COL, C2ROW );
+      oled.print ( '?' );
+
+      oled.setFont( System5x7 );
+    
+      oled.setCursor( POTCOL+POTWIDTH+POTOFFS+UNITGAP+17*3, POTSYMROW);
+      oled.print ( '%' );
+    
+      oled.setCursor( TEMP1COL+ICONGAP+UNITGAP+5*6, TEMP1ROW );
+      oled.print( 'C' );
+
+      oled.setCursor( BATCOL+ICONGAP+UNITGAP+4*6, BATROW );
+      oled.print( 'V' );
+
+ #if REMOTE
+      oled.setCursor( BATCHARGCOL+ICONGAP+UNITGAP+3*6, BATCHARGROW );
+      oled.print( '%' );
+ #endif
+
+      oled.setCursor( M2COL+ICONGAP+UNITGAP+5*6, M2ROW );
+      oled.print( '%' );
+
+      oled.setCursor( C1COL+ICONGAP+UNITGAP+4*6, C1ROW );
+      oled.print( 'A' );
+
+      oled.setCursor( C2COL+ICONGAP+UNITGAP+4*6, C2ROW );
+      oled.print( 'A' );
+    }
+     
+    //Draw the new frame's dynamic components
+    oled.setFont(System5x7);
+
+    //Temperatures
+    if (dsp_sd.temperature1 != sd.temperature1 || dsp_sd.temperature2 != sd.temperature2 || refresh )
+    {
+      dsp_sd.temperature1 = sd.temperature1;
+      dsp_sd.temperature2 = sd.temperature2;
+      oled.setCursor( TEMP1COL+ICONGAP, TEMP1ROW );
+      oled_printf( "%02d/%02d", sd.temperature1, sd.temperature2 );
+    }
+  
+    //Battery voltage
+    if (dsp_sd.battery != sd.battery || refresh )
+    {
+      dsp_sd.battery = sd.battery;
+      oled.setCursor( BATCOL+ICONGAP, BATROW );
+      oled_printf( "%02d.%01d", sd.battery/10, sd.battery%10 );
+    }
+
+    //Motor speed
+    if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
+    {
+      dsp_sd.motor1 = sd.motor1;
+      dsp_sd.motor2 = sd.motor2;
+
+      int scaled1 = (abs(sd.motor1)*100L+1024)/2047;
+      int scaled2 = (abs(sd.motor2)*100L+1024)/2047;
+      oled.setCursor( M2COL+ICONGAP, M2ROW );
+      if ( scaled1 < 100 && scaled2 < 100 ) oled_printf( "%02d/%02d", scaled1, scaled2 );
+      else oled.print( "MAXIM" );
+    }
+
+    //Motor 1 current
+    if (dsp_sd.current1 != sd.current1 || refresh )
+    {
+      dsp_sd.current1 = sd.current1;
+
+      int scaled = abs(sd.current1); // abs(current1)*1000L/2047;
+      if ( scaled > 999 ) scaled = 999;
+           
+      oled.setCursor( C1COL+ICONGAP, C1ROW );
+      oled_printf( "%02d.%01d", scaled/10, scaled%10 );
+
+      drawBar( BAR1COL, BAR1ROW, 8, 10*maxCurrentDisplay.value, scaled );
+    }
+
+    //Motor 2 current
+    if ( dsp_sd.current2 != sd.current2 || refresh )
+    {
+      dsp_sd.current2 = sd.current2;
+    
+      int scaled = abs(sd.current2);
+      if ( scaled > 999 ) scaled = 999;
+      //Digits 
+      oled.setCursor( C2COL+ICONGAP, C2ROW );
+      oled_printf( "%02d.%01d", scaled/10, scaled%10 );
+      //Bars
+      drawBar( BAR2COL, BAR2ROW, 8, 10*maxCurrentDisplay.value, scaled );
+    }
+
+    //Motor speed set point (in percentage)
+    if ( dsp_md.motorSetPoint != md.motorSetPoint || refresh )
+    {
+      dsp_md.motorSetPoint = md.motorSetPoint; 
+    
+      oled.setFont(Verdana_digits_16x24);
+      oled.setCursor( POTCOL+POTWIDTH+POTOFFS, POTROW );
+      oled_printf( "%03d", md.motorSetPoint );
+    }
+
+    //Radio status
+    if ( radioChanged || refresh )
+    {    
+      oled.setFont(Symbol_8x8);
+      oled.setCursor( RADIOCOL, RADIOROW );
+      oled.print( d.radioMode == RadioModeRemoteError ? '<' : '>' );
+    }
+  
+    //Locomotive direction
+    if ( dsp_md.motorMode != md.motorMode || refresh )
+    { 
+      char status;
+      dsp_md.motorMode = md.motorMode; 
+      switch ( md.motorMode )
+      {
+        case MotorModeForward : status = '1'; break;
+        case MotorModeReverse : status = '2'; break;
+        default: status = '0'; break;
+      }
+    
+      oled.setFont(Symbol_24x24);
+      oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
+      oled.print( status );
+    }
   }
 }
+//// Updates the default mode screen.
+//void updateDisplayDefault( bool refresh )
+//{
+////---SCREEN POSITIONS FOR EACH ELEMENT---
+//
+////Battery
+//
+//#if REMOTE
+//#define BATCOL 0
+//#define BATROW 6
+//#else
+//#define BATCOL 64
+//#define BATROW 0
+//#endif
+//
+//// Remote Battery
+//#define BATCHARGCOL 70
+//#define BATCHARGROW 0
+//
+////Temperatures for both motor drivers
+//#define TEMP1COL 0
+//#define TEMP1ROW 0
+//
+//////Locomotive Battery for remote effective thrust, in percentage
+////#define M1COL 0
+////#define M1ROW 6
+//
+////Motor effective thrust, in percentage
+//#define M2COL 0
+//#define M2ROW 7
+//
+////Motor currents, in amperes
+//#define C1COL 64
+//#define C1ROW 6
+//
+//#define C2COL 64
+//#define C2ROW 7
+//
+////Amperimeter bars
+//#define BAR1COL 112
+//#define BAR1ROW 7
+//
+//#define BAR2COL 120
+//#define BAR2ROW 7
+//
+////Main power indicator
+//#define POTCOL 2
+//#define POTOFFS 22
+//#define POTWIDTH 20
+//#define POTROW 2
+//#define POTSYMROW 4
+//
+////Radio status
+//#define RADIOCOL 0// 104
+//#define RADIOROW 2
+//
+////Icon and unit spacing
+//#define ICONGAP 11
+//#define UNITGAP 3
+//
+//  //Clear previous screen
+//  if ( refresh )
+//  {
+//    oled.clear();
+//  }  
+//  
+//  //Check radio status
+//  bool radioChanged = false;
+//  if ( dsp_d.radioMode != d.radioMode )
+//  {
+//    dsp_d.radioMode = d.radioMode;
+//    radioChanged = true;
+//  }
+//
+//  refresh = refresh || (REMOTE && radioChanged) ;
+//  bool showError = REMOTE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal);
+//
+//  //Draw the new frame static components
+//  if ( refresh )
+//  {
+//    oled.setFont( Symbol_8x8 );
+//
+//    oled.setCursor( TEMP1COL, TEMP1ROW );
+//    oled.print ( showError ? ' ' : ':' );   
+//    
+//    oled.setCursor( BATCOL, BATROW );
+//    oled.print ( showError ? ' ' : ';' );
+// 
+//    oled.setCursor( M2COL, M2ROW );
+//    oled.print ( showError ? ' ' : '=' );
+//
+//    oled.setCursor( C1COL, C1ROW );
+//    oled.print ( showError ? ' ' : '?' );
+//    
+//    oled.setCursor( C2COL, C2ROW );
+//    oled.print ( showError ? ' ' : '?' );
+//
+//    oled.setFont( System5x7 );
+//    
+//    oled.setCursor( POTCOL+POTWIDTH+POTOFFS+UNITGAP+17*3, POTSYMROW);
+//    oled.print ( showError ? ' ' : '%' );
+//    
+//    oled.setCursor( TEMP1COL+ICONGAP+UNITGAP+5*6, TEMP1ROW );
+//    oled.print( showError ? ' ' : 'C' );
+//
+//    oled.setCursor( BATCOL+ICONGAP+UNITGAP+4*6, BATROW );
+//    oled.print( showError ? ' ' : 'V' );
+//
+// #if REMOTE
+//    oled.setCursor( BATCHARGCOL+ICONGAP+UNITGAP+3*6, BATCHARGROW );
+//    oled.print( '%' );
+// #endif
+//
+//    oled.setCursor( M2COL+ICONGAP+UNITGAP+5*6, M2ROW );
+//    oled.print( showError ? ' ' : '%' );
+//
+//    oled.setCursor( C1COL+ICONGAP+UNITGAP+4*6, C1ROW );
+//    oled.print( showError ? ' ' : 'A' );
+//
+//    oled.setCursor( C2COL+ICONGAP+UNITGAP+4*6, C2ROW );
+//    oled.print( showError ? ' ' : 'A' );
+//  }
+//
+//  //Draw the new frame's dynamic components
+//  oled.setFont(System5x7);
+//  
+//  //Temperatures
+//  if (dsp_sd.temperature1 != sd.temperature1 || dsp_sd.temperature2 != sd.temperature2 || refresh )
+//  {
+//    dsp_sd.temperature1 = sd.temperature1;
+//    dsp_sd.temperature2 = sd.temperature2;
+//    oled.setCursor( TEMP1COL+ICONGAP, TEMP1ROW );
+//    if ( showError ) oled.print( "     " );
+//    //if ( showError ) oled.print( "--/--" );
+//    else oled_printf( "%02d/%02d", sd.temperature1, sd.temperature2 );
+//  }
+//  
+//  //Battery voltage
+//  if (dsp_sd.battery != sd.battery || refresh )
+//  {
+//    dsp_sd.battery = sd.battery;
+//    oled.setCursor( BATCOL+ICONGAP, BATROW );
+//    if ( showError ) oled.print( "    " );
+//    //if ( showError ) oled.print( "--.-" );
+//    else oled_printf( "%02d.%01d", sd.battery/10, sd.battery%10 );
+//  }
+//
+//  // Charge level 
+//  #if REMOTE
+//  if (dsp_d.battCharge != d.battCharge || refresh )
+//  {
+//    dsp_d.battCharge = d.battCharge;
+//    oled.setCursor( BATCHARGCOL+ICONGAP, BATCHARGROW );
+//    oled_printf( "%3d", d.battCharge );
+//  }
+//  #endif
+//
+//  //Motor speed
+//  if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
+//  {
+//    dsp_sd.motor1 = sd.motor1;
+//    dsp_sd.motor2 = sd.motor2;
+//
+//    int scaled1 = (abs(sd.motor1)*100L+1024)/2047;
+//    int scaled2 = (abs(sd.motor2)*100L+1024)/2047;
+//    oled.setCursor( M2COL+ICONGAP, M2ROW );
+//    if ( showError ) oled.print( "     " );
+//    //if ( showError ) oled.print( "--/--" );
+//    else if ( scaled1 < 100 && scaled2 < 100 ) oled_printf( "%02d/%02d", scaled1, scaled2 );
+//    else oled.print( "MAXIM" );
+//  }
+//
+//  //Motor 1 current
+//  if (dsp_sd.current1 != sd.current1 || refresh )
+//  {
+//    dsp_sd.current1 = sd.current1;
+//
+//    int scaled = abs(sd.current1); // abs(current1)*1000L/2047;
+//    if ( scaled > 999 ) scaled = 999;
+//           
+//    oled.setCursor( C1COL+ICONGAP, C1ROW );
+//    if ( showError ) oled.print( "    " );
+//    //if ( showError ) oled.print( "--.-" );
+//    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
+//
+//    if ( showError ) scaled = 0;
+//    drawBar( BAR1COL, BAR1ROW, 8, 10*maxCurrentDisplay.value, scaled );
+//  }
+//
+//  //Motor 2 current
+//  if ( dsp_sd.current2 != sd.current2 || refresh )
+//  {
+//    dsp_sd.current2 = sd.current2;
+//    
+//    int scaled = abs(sd.current2);
+//    if ( scaled > 999 ) scaled = 999;
+//    //Digits 
+//    oled.setCursor( C2COL+ICONGAP, C2ROW );
+//    if ( showError ) oled.print( "    " );
+//    //if ( showError ) oled.print( "--.-" );
+//    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
+//    //Bars
+//    if ( showError ) scaled = 0;
+//    drawBar( BAR2COL, BAR2ROW, 8, 10*maxCurrentDisplay.value, scaled );
+//  }
+//
+//  //Motor speed set point (in percentage)
+//  if ( dsp_md.motorSetPoint != md.motorSetPoint || refresh )
+//  {
+//    dsp_md.motorSetPoint = md.motorSetPoint; 
+//    
+//    oled.setFont(Verdana_digits_16x24);
+//    oled.setCursor( POTCOL+POTWIDTH+POTOFFS, POTROW );
+//    if ( showError ) oled.print( "==:" ); // this displays a train set
+//    else oled_printf( "%03d", md.motorSetPoint );
+//  }
+//
+//  //Radio status
+//  if ( radioChanged || refresh )
+//  {
+//    char c;
+////    if ( d.radioMode == RadioModeRemote ) c = '>';
+////    else if ( d.radioMode == RadioModeRemoteError ) c = '<';
+//
+//    switch ( d.radioMode )
+//    {
+//      case RadioModeRemote : c = '>'; break;
+//      case RadioModeRemoteError : c = '<'; break;
+//      default: c = ' ';
+//    }
+//    
+//    oled.setFont(Symbol_8x8);
+//    oled.setCursor( RADIOCOL, RADIOROW );
+//    oled.print( c );
+//  }
+//
+//  #if REMOTE
+//  if (dsp_d.battIsCharging != d.battIsCharging || refresh )
+//  {
+//    dsp_d.battIsCharging = d.battIsCharging;
+//    oled.setFont(Symbol_8x8);
+//    oled.setCursor( BATCHARGCOL, BATCHARGROW );
+//    oled.print ( d.battIsCharging ? 'A' : '@' );
+//  }
+//  #endif
+//  
+//  //Locomotive direction
+//  if ( dsp_md.motorMode != md.motorMode || refresh )
+//  { 
+//    char status;
+//    if ( REMOTE && radioChanged && d.radioMode == RadioModeLocal )
+//    {
+//      status = '/';
+//    }
+//    else
+//    {
+//      dsp_md.motorMode = md.motorMode; 
+//      switch ( md.motorMode )
+//      {
+//        case MotorModeForward : status = '1'; break;
+//        case MotorModeReverse : status = '2'; break;
+//        default: status = '0'; break;
+//      }
+//    }
+//    
+//    oled.setFont(Symbol_24x24);
+//    oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
+//    oled.print( status );
+//  }
+//}
 
 ////////////////////////////////////////////////////////////////////////////////
 
