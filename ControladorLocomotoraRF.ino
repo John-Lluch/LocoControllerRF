@@ -2,6 +2,7 @@
 
 
 #include <Arduino.h>
+#include "SWLogic.h"
 
 //
 // DEF
@@ -46,12 +47,7 @@ const uint8_t locomotive_address2[]  = {"loco2"};  // define locomotive identifi
 // DISPLAY
 //
 
-//#include "SSD1306AsciiAvrI2c.h"
-#include "SSD1306AsciiWire.h"
 
-#include "Verdana_digits_16x24.h"
-#include "Symbol_8x8.h"
-#include "Symbol_24x24.h"
 
 #define OLED13
 //#define OLED24
@@ -64,13 +60,19 @@ const uint8_t locomotive_address2[]  = {"loco2"};  // define locomotive identifi
 #define I2C_ADDRESS 0x3D  // 0X3C+SA0 - 0x3C or 0x3D
 #endif
 
+//#include "SSD1306AsciiAvrI2c.h"
 //#ifdef SSD1306AsciiAvrI2c_h
 //SSD1306AsciiAvrI2c oled; // create a display
 //#endif
 
+#include "SSD1306AsciiWire.h"
 #ifdef SSD1306AsciiWire_h
 SSD1306AsciiWire oled;   // create a display
 #endif
+
+#include "Verdana_digits_16x24.h"
+#include "Symbol_8x8.h"
+#include "Symbol_24x24.h"
 
 //
 // EEPROM
@@ -98,19 +100,17 @@ SSD1306AsciiWire oled;   // create a display
 #define BATTCHARGEPIN A7
 #define CHARGERPLUGPIN A8
 #define BATTCHECKPIN 7
-#define BATTCHARGERPIN 8
+#define BATTCHARGERPIN 8   // not used
 
 //
 //  ENCODER
 //
 
 #include <Encoder.h>
-#include "SWLogic.h"
-
-#define pinA 21
-#define pinB 20
-#define pinP 19
-Encoder encoder( pinA, pinB, pinP );   // create an encoder
+#define PINA 21
+#define PINB 20
+#define PINP 19
+Encoder encoder( PINA, PINB, PINP );   // create an encoder
 
 //
 //  SWITCH
@@ -235,23 +235,45 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100
    const int minv;
    const int maxv;
    const char *description;        //Option description that will show up in the screen, keep it short to prevent display glitches
-   ConfigOption(OptionType vType, int val, const int mi, const int ma, const char* desc) : 
-      valueType(vType), value(val), minv(mi), maxv(ma), description(desc) {}; //Constructor with parameters for the struct
+   const char format;              //Size for the printf format string
+   ConfigOption(OptionType vType, int val, const int mi, const int ma, const char* desc, const char fmt) : 
+      valueType(vType), value(val), minv(mi), maxv(ma), description(desc), format(fmt) {}; //Constructor with parameters for the struct
  };
-
- #define NUMVARS (2 + (RADIO!=0))   //Define the amount of settings in the menu
  
  //Declare options
- ConfigOption radioChannel(OptionTypeRotate,80, 0, 125, "Canal Radio");
- ConfigOption activeBraking(OptionTypeShift,0, 0, 1, "Fre Motor"); // TO DO: Make it work !
- ConfigOption maxCurrentDisplay(OptionTypeShift, 20, 0, 32, "Max Ampers");
+ ConfigOption radioChannel      (OptionTypeRotate, 80, 0, 125, "Canal Radio", '3');
+ ConfigOption radioPALevel      (OptionTypeShift,   1, 0, 3,   "Potenc Radio", '1');
+ ConfigOption activeBraking     (OptionTypeShift,   0, 0, 1,   "Fre Motor", '1'); // TO DO: Make it work !
+ ConfigOption maxBarCurrent     (OptionTypeShift,  20, 0, 32,  "Max Ampers", '2');
+ ConfigOption maxSpeedForward   (OptionTypeShift, 100, 0, 100, "Max Endavant", '3');
+ ConfigOption maxSpeedReverse   (OptionTypeShift, 100, 0, 100, "Max Enrera", '3');
+ #if !REMOTE
+ ConfigOption speedLimit        (OptionTypeShift, 100, 0, 100, "Limit Veloc", '3');
+ #endif
+ ConfigOption dummyDisplay3     (OptionTypeShift, 20, 0, 32, "Dummy3", '3');
+ ConfigOption dummyDisplay4     (OptionTypeShift, 20, 0, 32, "Dummy4", '3');
+ ConfigOption dummyDisplay5     (OptionTypeShift, 20, 0, 32, "Dummy5", '3');
+ ConfigOption dummyDisplay6     (OptionTypeShift, 20, 0, 32, "Dummy6", '3');
+ ConfigOption dummyDisplay7     (OptionTypeShift, 20, 0, 32, "Dummy7", '3');
+ ConfigOption dummyDisplay8     (OptionTypeShift, 20, 0, 32, "Dummy8", '3');
  //ConfigOption smoothThrottle(OptionTypeBool,0,"Accel. suau");
 
+
+ //#define NUMVARS (10 + (RADIO!=0))   //Define the amount of settings in the menu
+ 
 //Put all options in a table
- ConfigOption *varRefs[] = { &activeBraking, &maxCurrentDisplay, &radioChannel };
-// ConfigOption *varRefs[NUMVARS] = { &radioChannel, &activeBraking, &smoothThrottle };
+ ConfigOption *varRefs[] = { &radioChannel, &radioPALevel, 
+    &activeBraking, &maxBarCurrent, 
+    &maxSpeedForward, &maxSpeedReverse,
+ #if !REMOTE
+    &speedLimit,
+ #endif 
+    &dummyDisplay3, &dummyDisplay4, &dummyDisplay5, &dummyDisplay6, &dummyDisplay7, &dummyDisplay8};
+
+#define NUMVARS (sizeof(varRefs)/sizeof(ConfigOption*))
 
 int configVarIndex = 0; //Highlighted option in the menu
+int configOffset = 0; //Config menu offset
 
 bool userAction = false;
 
@@ -305,7 +327,7 @@ void setup()
   pinMode( BATTCHARGEPIN, INPUT );
   pinMode( CHARGERPLUGPIN, INPUT );
   pinMode( BATTCHECKPIN, OUTPUT );
-  pinMode( BATTCHARGERPIN, INPUT );
+  pinMode( BATTCHARGERPIN, INPUT );  // not used
 #endif
 
 //
@@ -335,7 +357,8 @@ void setup()
   radio.enableAckPayload();          // We will be using the Ack Payload feature, so please enable it
   radio.enableDynamicPayloads();     // Ack payloads are dynamic payloads
   radio.setRetries( 6, 15 );         // Delay in 250us multiples and retries when connection fails
-  radio.setPALevel( RF24_PA_LOW );   // Using low power amplifier level
+  //radio.setPALevel( RF24_PA_LOW );   // Using low power amplifier level
+  radio.setPALevel( radioPALevel.value );   // Using low power amplifier level by default
   radio.setDataRate( RF24_1MBPS );   // Using 1MB/s of data rate
   radio.setChannel( radioChannel.value );            // Using channel 80 by default
   #if REMOTE
@@ -353,6 +376,7 @@ void setup()
 //
 // DISPLAY
 //
+
 #ifdef SSD1306AsciiWire_h
   Wire.setClock( 100000L ); // other possibilities are 400000L and 2500000L, but don't work
 #endif
@@ -423,9 +447,9 @@ void loop()
   #if LOCOMOTIVE
     writeToRemote();
   #endif
-  
-  updateScreenMode();
-  updateDisplay();
+
+    updateScreenMode();
+    updateDisplay();
 
  
   //Serial.print("RAM: ");
@@ -500,7 +524,8 @@ void storeSettings()
     addr += sizeof(varRefs[i]->value);
   }
 
-  radio.setChannel( radioChannel.value );  // aqui
+  // radio.setChannel( radioChannel.value );  // FIX ME: Should we uncoment this?
+  // radio.setPALevel( radioPALevel.value );  // FIX ME: Should we uncoment this?
 }
 
 // Load settings from permanent memory
@@ -959,7 +984,10 @@ void selectMotorSpeed()
       {
         md.motorSetPoint = md.motorSetPoint + delta;          //Change the motor speed according to user input
         if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
-        if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
+        //if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
+        int maxSetpoint = maxSpeedReverse.value ;
+        if ( md.motorMode == MotorModeForward ) maxSetpoint = maxSpeedForward.value;
+        if ( md.motorSetPoint > maxSetpoint ) md.motorSetPoint = maxSetpoint; //Avoid overflow
       }
     }
   }
@@ -1009,7 +1037,8 @@ void selectConfigValue()
             default : break;        
           }
           varRefs[configVarIndex]->value = value;
-          if ( varRefs[configVarIndex] == &radioChannel ) radio.setChannel(value);
+          if ( varRefs[configVarIndex] == &radioChannel ) radio.setChannel(value); // FIX ME: should we set it here right away or wait until save settings 
+          if ( varRefs[configVarIndex] == &radioPALevel ) radio.setPALevel(value); // FIX ME: should we set it here right away or wait until save settings
         }
       }
     }
@@ -1038,12 +1067,12 @@ void sendMotorSpeed()
   preMotorSetpoint = md.motorSetPoint;
   timMotor.timer( !sendNow, 1000 );
   
-  if ( sendNow )
+  if ( sendNow ) // aqui
   {   
     int sign = 1;
     if ( md.motorMode == MotorModeReverse ) sign = -1;
     ST.freewheel( '*', md.motorMode == MotorModeStop ); // Turn on freewheeling when mode is Stop.
-    ST.motor    ( '*', (md.motorSetPoint*2047L)/100 * sign ); // Set both motor speeds
+    ST.motor    ( '*', (2047L*md.motorSetPoint*speedLimit.value)/10000L * sign ); // Set both motor speeds
 #if DEBUGA
     Serial.print( "MotorSpeed: " );
     Serial.println( md.motorSetPoint );
@@ -1099,6 +1128,11 @@ void writeToLocomotive()
 }
 
 #endif
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Display related functions
+////////////////////////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1381,7 +1415,7 @@ void updateDisplayDefault( bool refresh )
       oled.setCursor( C1COL+ICONGAP, C1ROW );
       oled_printf( "%02d.%01d", scaled/10, scaled%10 );
 
-      drawBar( BAR1COL, BAR1ROW, 8, 10*maxCurrentDisplay.value, scaled );
+      drawBar( BAR1COL, BAR1ROW, 8, 10*maxBarCurrent.value, scaled );
     }
 
     //Motor 2 current
@@ -1395,7 +1429,7 @@ void updateDisplayDefault( bool refresh )
       oled.setCursor( C2COL+ICONGAP, C2ROW );
       oled_printf( "%02d.%01d", scaled/10, scaled%10 );
       //Bars
-      drawBar( BAR2COL, BAR2ROW, 8, 10*maxCurrentDisplay.value, scaled );
+      drawBar( BAR2COL, BAR2ROW, 8, 10*maxBarCurrent.value, scaled );
     }
 
     //Motor speed set point (in percentage)
@@ -1434,286 +1468,17 @@ void updateDisplayDefault( bool refresh )
     }
   }
 }
-//// Updates the default mode screen.
-//void updateDisplayDefault( bool refresh )
-//{
-////---SCREEN POSITIONS FOR EACH ELEMENT---
-//
-////Battery
-//
-//#if REMOTE
-//#define BATCOL 0
-//#define BATROW 6
-//#else
-//#define BATCOL 64
-//#define BATROW 0
-//#endif
-//
-//// Remote Battery
-//#define BATCHARGCOL 70
-//#define BATCHARGROW 0
-//
-////Temperatures for both motor drivers
-//#define TEMP1COL 0
-//#define TEMP1ROW 0
-//
-//////Locomotive Battery for remote effective thrust, in percentage
-////#define M1COL 0
-////#define M1ROW 6
-//
-////Motor effective thrust, in percentage
-//#define M2COL 0
-//#define M2ROW 7
-//
-////Motor currents, in amperes
-//#define C1COL 64
-//#define C1ROW 6
-//
-//#define C2COL 64
-//#define C2ROW 7
-//
-////Amperimeter bars
-//#define BAR1COL 112
-//#define BAR1ROW 7
-//
-//#define BAR2COL 120
-//#define BAR2ROW 7
-//
-////Main power indicator
-//#define POTCOL 2
-//#define POTOFFS 22
-//#define POTWIDTH 20
-//#define POTROW 2
-//#define POTSYMROW 4
-//
-////Radio status
-//#define RADIOCOL 0// 104
-//#define RADIOROW 2
-//
-////Icon and unit spacing
-//#define ICONGAP 11
-//#define UNITGAP 3
-//
-//  //Clear previous screen
-//  if ( refresh )
-//  {
-//    oled.clear();
-//  }  
-//  
-//  //Check radio status
-//  bool radioChanged = false;
-//  if ( dsp_d.radioMode != d.radioMode )
-//  {
-//    dsp_d.radioMode = d.radioMode;
-//    radioChanged = true;
-//  }
-//
-//  refresh = refresh || (REMOTE && radioChanged) ;
-//  bool showError = REMOTE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal);
-//
-//  //Draw the new frame static components
-//  if ( refresh )
-//  {
-//    oled.setFont( Symbol_8x8 );
-//
-//    oled.setCursor( TEMP1COL, TEMP1ROW );
-//    oled.print ( showError ? ' ' : ':' );   
-//    
-//    oled.setCursor( BATCOL, BATROW );
-//    oled.print ( showError ? ' ' : ';' );
-// 
-//    oled.setCursor( M2COL, M2ROW );
-//    oled.print ( showError ? ' ' : '=' );
-//
-//    oled.setCursor( C1COL, C1ROW );
-//    oled.print ( showError ? ' ' : '?' );
-//    
-//    oled.setCursor( C2COL, C2ROW );
-//    oled.print ( showError ? ' ' : '?' );
-//
-//    oled.setFont( System5x7 );
-//    
-//    oled.setCursor( POTCOL+POTWIDTH+POTOFFS+UNITGAP+17*3, POTSYMROW);
-//    oled.print ( showError ? ' ' : '%' );
-//    
-//    oled.setCursor( TEMP1COL+ICONGAP+UNITGAP+5*6, TEMP1ROW );
-//    oled.print( showError ? ' ' : 'C' );
-//
-//    oled.setCursor( BATCOL+ICONGAP+UNITGAP+4*6, BATROW );
-//    oled.print( showError ? ' ' : 'V' );
-//
-// #if REMOTE
-//    oled.setCursor( BATCHARGCOL+ICONGAP+UNITGAP+3*6, BATCHARGROW );
-//    oled.print( '%' );
-// #endif
-//
-//    oled.setCursor( M2COL+ICONGAP+UNITGAP+5*6, M2ROW );
-//    oled.print( showError ? ' ' : '%' );
-//
-//    oled.setCursor( C1COL+ICONGAP+UNITGAP+4*6, C1ROW );
-//    oled.print( showError ? ' ' : 'A' );
-//
-//    oled.setCursor( C2COL+ICONGAP+UNITGAP+4*6, C2ROW );
-//    oled.print( showError ? ' ' : 'A' );
-//  }
-//
-//  //Draw the new frame's dynamic components
-//  oled.setFont(System5x7);
-//  
-//  //Temperatures
-//  if (dsp_sd.temperature1 != sd.temperature1 || dsp_sd.temperature2 != sd.temperature2 || refresh )
-//  {
-//    dsp_sd.temperature1 = sd.temperature1;
-//    dsp_sd.temperature2 = sd.temperature2;
-//    oled.setCursor( TEMP1COL+ICONGAP, TEMP1ROW );
-//    if ( showError ) oled.print( "     " );
-//    //if ( showError ) oled.print( "--/--" );
-//    else oled_printf( "%02d/%02d", sd.temperature1, sd.temperature2 );
-//  }
-//  
-//  //Battery voltage
-//  if (dsp_sd.battery != sd.battery || refresh )
-//  {
-//    dsp_sd.battery = sd.battery;
-//    oled.setCursor( BATCOL+ICONGAP, BATROW );
-//    if ( showError ) oled.print( "    " );
-//    //if ( showError ) oled.print( "--.-" );
-//    else oled_printf( "%02d.%01d", sd.battery/10, sd.battery%10 );
-//  }
-//
-//  // Charge level 
-//  #if REMOTE
-//  if (dsp_d.battCharge != d.battCharge || refresh )
-//  {
-//    dsp_d.battCharge = d.battCharge;
-//    oled.setCursor( BATCHARGCOL+ICONGAP, BATCHARGROW );
-//    oled_printf( "%3d", d.battCharge );
-//  }
-//  #endif
-//
-//  //Motor speed
-//  if ( dsp_sd.motor1 != sd.motor1 || dsp_sd.motor2 != sd.motor2 || refresh )
-//  {
-//    dsp_sd.motor1 = sd.motor1;
-//    dsp_sd.motor2 = sd.motor2;
-//
-//    int scaled1 = (abs(sd.motor1)*100L+1024)/2047;
-//    int scaled2 = (abs(sd.motor2)*100L+1024)/2047;
-//    oled.setCursor( M2COL+ICONGAP, M2ROW );
-//    if ( showError ) oled.print( "     " );
-//    //if ( showError ) oled.print( "--/--" );
-//    else if ( scaled1 < 100 && scaled2 < 100 ) oled_printf( "%02d/%02d", scaled1, scaled2 );
-//    else oled.print( "MAXIM" );
-//  }
-//
-//  //Motor 1 current
-//  if (dsp_sd.current1 != sd.current1 || refresh )
-//  {
-//    dsp_sd.current1 = sd.current1;
-//
-//    int scaled = abs(sd.current1); // abs(current1)*1000L/2047;
-//    if ( scaled > 999 ) scaled = 999;
-//           
-//    oled.setCursor( C1COL+ICONGAP, C1ROW );
-//    if ( showError ) oled.print( "    " );
-//    //if ( showError ) oled.print( "--.-" );
-//    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
-//
-//    if ( showError ) scaled = 0;
-//    drawBar( BAR1COL, BAR1ROW, 8, 10*maxCurrentDisplay.value, scaled );
-//  }
-//
-//  //Motor 2 current
-//  if ( dsp_sd.current2 != sd.current2 || refresh )
-//  {
-//    dsp_sd.current2 = sd.current2;
-//    
-//    int scaled = abs(sd.current2);
-//    if ( scaled > 999 ) scaled = 999;
-//    //Digits 
-//    oled.setCursor( C2COL+ICONGAP, C2ROW );
-//    if ( showError ) oled.print( "    " );
-//    //if ( showError ) oled.print( "--.-" );
-//    else oled_printf( "%02d.%01d", scaled/10, scaled%10 );
-//    //Bars
-//    if ( showError ) scaled = 0;
-//    drawBar( BAR2COL, BAR2ROW, 8, 10*maxCurrentDisplay.value, scaled );
-//  }
-//
-//  //Motor speed set point (in percentage)
-//  if ( dsp_md.motorSetPoint != md.motorSetPoint || refresh )
-//  {
-//    dsp_md.motorSetPoint = md.motorSetPoint; 
-//    
-//    oled.setFont(Verdana_digits_16x24);
-//    oled.setCursor( POTCOL+POTWIDTH+POTOFFS, POTROW );
-//    if ( showError ) oled.print( "==:" ); // this displays a train set
-//    else oled_printf( "%03d", md.motorSetPoint );
-//  }
-//
-//  //Radio status
-//  if ( radioChanged || refresh )
-//  {
-//    char c;
-////    if ( d.radioMode == RadioModeRemote ) c = '>';
-////    else if ( d.radioMode == RadioModeRemoteError ) c = '<';
-//
-//    switch ( d.radioMode )
-//    {
-//      case RadioModeRemote : c = '>'; break;
-//      case RadioModeRemoteError : c = '<'; break;
-//      default: c = ' ';
-//    }
-//    
-//    oled.setFont(Symbol_8x8);
-//    oled.setCursor( RADIOCOL, RADIOROW );
-//    oled.print( c );
-//  }
-//
-//  #if REMOTE
-//  if (dsp_d.battIsCharging != d.battIsCharging || refresh )
-//  {
-//    dsp_d.battIsCharging = d.battIsCharging;
-//    oled.setFont(Symbol_8x8);
-//    oled.setCursor( BATCHARGCOL, BATCHARGROW );
-//    oled.print ( d.battIsCharging ? 'A' : '@' );
-//  }
-//  #endif
-//  
-//  //Locomotive direction
-//  if ( dsp_md.motorMode != md.motorMode || refresh )
-//  { 
-//    char status;
-//    if ( REMOTE && radioChanged && d.radioMode == RadioModeLocal )
-//    {
-//      status = '/';
-//    }
-//    else
-//    {
-//      dsp_md.motorMode = md.motorMode; 
-//      switch ( md.motorMode )
-//      {
-//        case MotorModeForward : status = '1'; break;
-//        case MotorModeReverse : status = '2'; break;
-//        default: status = '0'; break;
-//      }
-//    }
-//    
-//    oled.setFont(Symbol_24x24);
-//    oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
-//    oled.print( status );
-//  }
-//}
+
 
 ////////////////////////////////////////////////////////////////////////////////
-
 // Updates the config mode screen
 void updateDisplayConfig( bool refresh )
 {
 //Position of the various elements on the screen
 #define NAMESELCOL 0
 #define NAMECOL (NAMESELCOL+8)
-#define NAMEROW 2
+#define FIRSTROW 0 /*2*/
+#define ENDROW 8
 #define VARCOL 92
 #define VARSELCOL (VARCOL+(4*6)+3)
 
@@ -1726,51 +1491,147 @@ void updateDisplayConfig( bool refresh )
   //Draw the next frame
   oled.setFont(System5x7);
 
+  static int dsp_configOffset = -1;
+  static int dsp_configVarIndex = -1;
+  
+  if ( dsp_configVarIndex != configVarIndex )
+  {
+    if (configVarIndex < configOffset+FIRSTROW)
+    {
+      configOffset = configVarIndex-FIRSTROW;
+      refresh = true;
+    }
+    else if (configVarIndex >= configOffset+ENDROW )
+    {
+      configOffset = configVarIndex-ENDROW+1;
+      refresh = true;
+    }
+  }
+
   if ( refresh )
   {
     //Draw the various options names
-    for ( int i=0 ; i < NUMVARS ; i++ )
+    for ( int i=FIRSTROW ; i < ENDROW ; i++ )
     {
-      oled.setCursor( NAMECOL, i+NAMEROW );
-      oled.print( varRefs[i]->description );
-      //oled.print( varNames[i] );
+      int varIndex = i-FIRSTROW+configOffset;
+      if ( varIndex >= NUMVARS ) break;
+      oled.setCursor( NAMECOL, i );
+      oled_printf( "%-12s", varRefs[varIndex]->description );
     }
-  
-    oled.setCursor( NAMECOL, NUMVARS+NAMEROW );
-    oled.print( "GUARDAR" );
+
+    if ( configOffset+ENDROW-1 == NUMVARS )
+    { 
+      // add the 'SAVE & EXIT' row
+      oled.setCursor( NAMECOL, ENDROW-1 );
+      oled_printf( "%-12s","GUARDAR" );  
+      oled.clearField( VARCOL, ENDROW-1, 4 );
+    }
   }
   
   //Draw the current value for each option
   static int dsp_varValues[NUMVARS];
-  for ( int i=0 ; i < NUMVARS ; i++ )
+  char format[] = { '%', '4' ,'.' ,'4' , 'd', '\0' };
+  for ( int i=FIRSTROW ; i < ENDROW ; i++ )
   {
-    if ( dsp_varValues[i] != varRefs[i]->value || refresh )
+    int varIndex = i-FIRSTROW+configOffset;
+    if ( varIndex >= NUMVARS ) break;
+    if ( dsp_varValues[varIndex] != varRefs[varIndex]->value || refresh )
     {
-      dsp_varValues[i] = varRefs[i]->value;
-      oled.setCursor( VARCOL, i+NAMEROW );
-      oled_printf( "%04d", varRefs[i]->value );
+      dsp_varValues[varIndex] = varRefs[varIndex]->value;
+      format[3] = varRefs[varIndex]->format;
+      oled.setCursor( VARCOL, i );
+      oled_printf( format, varRefs[varIndex]->value );
     }
   }
 
-  static int dsp_configVarIndex = -1;
   
   //Draw the cursor for the highlighted option
   if ( dsp_configVarIndex != configVarIndex || dsp_d.configMode != d.configMode || refresh )
   {
     dsp_configVarIndex = configVarIndex;
     dsp_d.configMode = d.configMode;
-    for ( int i=0 ; i <= NUMVARS ; i++ )
-    {
-      char namecurs = (d.configMode == ConfigModeSelect && configVarIndex == i ? '*' : ' ');
-      oled.setCursor( NAMESELCOL, i+NAMEROW );
+    for ( int i=FIRSTROW ; i < ENDROW ; i++ )
+    {  
+      int varIndex = i-FIRSTROW+configOffset;
+      if ( varIndex > NUMVARS ) break;
+      char namecurs = (d.configMode == ConfigModeSelect && configVarIndex == varIndex ? '*' : ' ');
+      oled.setCursor( NAMESELCOL, i );
       oled.print( namecurs );
       
-      char varcurs = (d.configMode == ConfigModeEdit && configVarIndex == i ? '*' : ' ');
-      oled.setCursor( VARSELCOL, i+NAMEROW );
+      char varcurs = (d.configMode == ConfigModeEdit && configVarIndex == varIndex ? '<' : ' ');
+      oled.setCursor( VARSELCOL, i );
       oled.print( varcurs );
     }
   }
 }
+
+
+//// Updates the config mode screen
+//void updateDisplayConfig( bool refresh )
+//{
+////Position of the various elements on the screen
+//#define NAMESELCOL 0
+//#define NAMECOL (NAMESELCOL+8)
+//#define NAMEROW 0 /*2*/
+//#define VARCOL 92
+//#define VARSELCOL (VARCOL+(4*6)+3)
+//
+//  //Clear the previous frame
+//  if ( refresh )
+//  {
+//    oled.clear();
+//  }
+//
+//  //Draw the next frame
+//  oled.setFont(System5x7);
+//
+//  static int dsp_configOffset = -1;
+//
+//  if ( refresh )
+//  {
+//    //Draw the various options names
+//    for ( int i=0 ; i < NUMVARS ; i++ )
+//    {
+//      oled.setCursor( NAMECOL, i-configOffset+NAMEROW );
+//      oled.print( varRefs[i]->description );
+//      //oled.print( varNames[i] );
+//    }
+//  
+//    oled.setCursor( NAMECOL, NUMVARS+NAMEROW );
+//    oled.print( "GUARDAR" );
+//  }
+//  
+//  //Draw the current value for each option
+//  static int dsp_varValues[NUMVARS];
+//  for ( int i=0 ; i < NUMVARS ; i++ )
+//  {
+//    if ( dsp_varValues[i] != varRefs[i]->value || refresh )
+//    {
+//      dsp_varValues[i] = varRefs[i]->value;
+//      oled.setCursor( VARCOL, i+NAMEROW );
+//      oled_printf( "%04d", varRefs[i]->value );
+//    }
+//  }
+//
+//  static int dsp_configVarIndex = -1;
+//  
+//  //Draw the cursor for the highlighted option
+//  if ( dsp_configVarIndex != configVarIndex || dsp_d.configMode != d.configMode || refresh )
+//  {
+//    dsp_configVarIndex = configVarIndex;
+//    dsp_d.configMode = d.configMode;
+//    for ( int i=0 ; i <= NUMVARS ; i++ )
+//    {
+//      char namecurs = (d.configMode == ConfigModeSelect && configVarIndex == i ? '*' : ' ');
+//      oled.setCursor( NAMESELCOL, i+NAMEROW );
+//      oled.print( namecurs );
+//      
+//      char varcurs = (d.configMode == ConfigModeEdit && configVarIndex == i ? '*' : ' ');
+//      oled.setCursor( VARSELCOL, i+NAMEROW );
+//      oled.print( varcurs );
+//    }
+//  }
+//}
 
 ////////////////////////////////////////////////////////////////////////////////
 
