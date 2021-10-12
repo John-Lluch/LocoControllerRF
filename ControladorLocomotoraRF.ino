@@ -10,8 +10,8 @@
 
 
 //Set both remote and locomotive to 0 to disable radio
-#define REMOTE 0
-#define LOCOMOTIVE 1
+#define REMOTE 1
+#define LOCOMOTIVE 0
 
 #define DEBUGA 0  //Debug flag
 
@@ -38,9 +38,9 @@ USBSabertooth ST(C, 128); // create a Sabertooth
 #define CE_PIN   9
 #define CS_PIN  10
 RF24 radio(CE_PIN, CS_PIN); // create a Radio
-const uint8_t remote_address[] = {"remot"};  // define remote identifier
-const uint8_t locomotive_address1[]  = {"loco1"};  // define locomotive identifier
-const uint8_t locomotive_address2[]  = {"loco2"};  // define locomotive identifier
+uint8_t remote_address[] = {"remot"};  // define remote identifier
+uint8_t locomotive_address1[]  = {"loco1"};  // define locomotive identifier
+const uint8_t locomotive_address2[]  = {"moco1"};  // define locomotive identifier
 #endif
 
 //
@@ -90,8 +90,11 @@ SSD1306AsciiWire oled;   // create a display
 // IO
 //
 
-#define IOPIN0 4
-#define IOPIN1 5
+#define IPIN0 4
+#define IPIN1 5
+
+#define OPIN0 7
+#define OPIN1 8
 
 //
 // CHARGER
@@ -100,7 +103,7 @@ SSD1306AsciiWire oled;   // create a display
 #define BATTCHARGEPIN A7
 #define CHARGERPLUGPIN A8
 #define BATTCHECKPIN 7
-#define BATTCHARGERPIN 8   // not used
+//#define BATTCHARGERPIN 8   // not used
 
 //
 //  ENCODER
@@ -116,7 +119,7 @@ Encoder encoder( PINA, PINB, PINP );   // create an encoder
 //  SWITCH
 //
 
-#define SWPIN 7
+#define SWPIN 6
 bool remoteSwitch = false;
 
 //
@@ -178,8 +181,8 @@ struct RemoteData
 {
   int motorSetPoint;
   MotorMode motorMode;
-  byte io0;
-  byte io1;
+  byte button0;
+  byte button1;
   RemoteData(byte b, MotorMode m) { memset( this, b, sizeof(*this) ); motorMode=m; }
 };
 
@@ -241,12 +244,13 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100
  };
  
  //Declare options
- ConfigOption radioChannel      (OptionTypeRotate, 80, 0, 125, "Canal Radio", '3');
- ConfigOption radioPALevel      (OptionTypeShift,   1, 0, 3,   "Potenc Radio", '1');
- ConfigOption activeBraking     (OptionTypeShift,   0, 0, 1,   "Fre Motor", '1'); // TO DO: Make it work !
- ConfigOption maxBarCurrent     (OptionTypeShift,  20, 0, 32,  "Max Ampers", '2');
- ConfigOption maxSpeedForward   (OptionTypeShift, 100, 0, 100, "Max Endavant", '3');
- ConfigOption maxSpeedReverse   (OptionTypeShift, 100, 0, 100, "Max Enrera", '3');
+ ConfigOption radioChannel      (OptionTypeRotate, 80, 0, 125,  "Canal Radio", '3');
+ ConfigOption channelAddress    (OptionTypeRotate, '1', 0, 250, "Addreca",     '3');
+ ConfigOption radioPALevel      (OptionTypeShift,   1, 0, 3,    "Potenc Radio",'1');
+ ConfigOption activeBraking     (OptionTypeShift,   0, 0, 1,    "Fre Motor",   '1'); // TO DO: Make it work !
+ ConfigOption maxBarCurrent     (OptionTypeShift,  20, 0, 32,   "Max Ampers",  '2');
+ ConfigOption maxSpeedForward   (OptionTypeShift, 100, 0, 100,  "Max Endavant",'3');
+ ConfigOption maxSpeedReverse   (OptionTypeShift, 100, 0, 100,  "Max Enrera",  '3');
  #if !REMOTE
  ConfigOption speedLimit        (OptionTypeShift, 100, 0, 100, "Limit Veloc", '3');
  #endif
@@ -256,19 +260,24 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100
  ConfigOption dummyDisplay6     (OptionTypeShift, 20, 0, 32, "Dummy6", '3');
  ConfigOption dummyDisplay7     (OptionTypeShift, 20, 0, 32, "Dummy7", '3');
  ConfigOption dummyDisplay8     (OptionTypeShift, 20, 0, 32, "Dummy8", '3');
- //ConfigOption smoothThrottle(OptionTypeBool,0,"Accel. suau");
+// ConfigOption smoothThrottle(OptionTypeBool,0,"Accel. suau");
 
 
  //#define NUMVARS (10 + (RADIO!=0))   //Define the amount of settings in the menu
  
 //Put all options in a table
- ConfigOption *varRefs[] = { &radioChannel, &radioPALevel, 
+ ConfigOption *varRefs[] = 
+ { 
+    &radioChannel, &channelAddress, &radioPALevel, 
     &activeBraking, &maxBarCurrent, 
     &maxSpeedForward, &maxSpeedReverse,
  #if !REMOTE
     &speedLimit,
  #endif 
-    &dummyDisplay3, &dummyDisplay4, &dummyDisplay5, &dummyDisplay6, &dummyDisplay7, &dummyDisplay8};
+// &dummyDisplay3, 
+// &dummyDisplay4, 
+// &dummyDisplay5, &dummyDisplay6, &dummyDisplay7, &dummyDisplay8
+};
 
 #define NUMVARS (sizeof(varRefs)/sizeof(ConfigOption*))
 
@@ -312,12 +321,11 @@ void setup()
 //
 // IO
 //
-#if REMOTE
-  pinMode( IOPIN0, INPUT_PULLUP ); 
-  pinMode( IOPIN1, INPUT_PULLUP ); 
-#elif LOCOMOTIVE
-  pinMode( IOPIN0, OUTPUT ); 
-  pinMode( IOPIN1, OUTPUT ); 
+  pinMode( IPIN0, INPUT_PULLUP ); 
+  pinMode( IPIN1, INPUT_PULLUP ); 
+#if !REMOTE
+  pinMode( OPIN0, OUTPUT ); 
+  pinMode( OPIN1, OUTPUT ); 
 #endif
 
 //
@@ -327,7 +335,7 @@ void setup()
   pinMode( BATTCHARGEPIN, INPUT );
   pinMode( CHARGERPLUGPIN, INPUT );
   pinMode( BATTCHECKPIN, OUTPUT );
-  pinMode( BATTCHARGERPIN, INPUT );  // not used
+//  pinMode( BATTCHARGERPIN, INPUT );  // not used
 #endif
 
 //
@@ -361,6 +369,8 @@ void setup()
   radio.setPALevel( radioPALevel.value );   // Using low power amplifier level by default
   radio.setDataRate( RF24_1MBPS );   // Using 1MB/s of data rate
   radio.setChannel( radioChannel.value );            // Using channel 80 by default
+  remote_address[4] = channelAddress.value;
+  locomotive_address1[4] = channelAddress.value;
   #if REMOTE
     radio.openWritingPipe(remote_address);             // communicate back and forth. Remote listens, Locomotive talks.
     radio.openReadingPipe(1, locomotive_address1);      // see starping example for multiple reading pipes (1 through 5 )
@@ -389,13 +399,13 @@ void setup()
   oled.begin(&SH1106_128x64, I2C_ADDRESS);
 #endif
 
-#ifdef OLED24
-  pinMode( 8, OUTPUT);  // RES Pin Display
-  digitalWrite( 8, LOW);
-  delay (500);
-  digitalWrite( 8, HIGH);
-  oled.begin(&Adafruit128x64, I2C_ADDRESS);
-#endif
+//#ifdef OLED24
+//  pinMode( 8, OUTPUT);  // RES Pin Display
+//  digitalWrite( 8, LOW);
+//  delay (500);
+//  digitalWrite( 8, HIGH);
+//  oled.begin(&Adafruit128x64, I2C_ADDRESS);
+//#endif
 
 }
 
@@ -417,11 +427,11 @@ void loop()
     readChargeStatus();
   #endif
 
-  #if REMOTE
-    inputIO();
-  #elif LOCOMOTIVE
-    outputIO();
-  #endif
+//  #if REMOTE
+//    inputIO();
+//  #elif LOCOMOTIVE
+//    outputIO();
+//  #endif
 
   #if SABERTOOTH 
     readSabertooth();
@@ -434,9 +444,14 @@ void loop()
   #if LOCOMOTIVE
     readFromRemote();
   #endif  
-  
+
+  selectInputButtons();
   selectMotorSpeed();
   selectConfigValue();
+
+  #if !REMOTE
+    outputRelay();
+  #endif
 
   #if SABERTOOTH
     sendMotorSpeed();
@@ -512,7 +527,7 @@ void docommand()
 
 #define StoreInitAddr 2
 #define StoreSentinelAddr 0
-const int StoreSentinelValue = 0x1965;
+const int StoreSentinelValue = 0x1966;
 
 // Store settings to permanent memory
 void storeSettings()
@@ -624,13 +639,16 @@ void  readBatteryCharge()
   if ( b1 ) 
   {
      int rawCharge = analogRead( BATTCHARGEPIN );
-     const int maxRawCharge = 330;   // this is about an input of  1.1v -> 1.1/3.3 * 1024 = 341 -> 
+     const int maxRawCharge = 332;   // this is about an input of  1.1v -> 1.1/3.3 * 1024 = 341 -> 
      const int minRawCharge = 280;   // this is about an input of  0.9v -> 0.9/3.3 * 1024 = 279
      if (rawCharge > maxRawCharge) rawCharge = maxRawCharge;
      if (rawCharge < minRawCharge) rawCharge = minRawCharge;
      int percentCharge = (rawCharge-minRawCharge)*100L/(maxRawCharge-minRawCharge);
      if (percentCharge < d.battCharge) d.battCharge = (d.battCharge*80L + percentCharge*20L)/100;
      else d.battCharge = percentCharge;
+
+     // debug 
+       //d.battCharge=rawCharge;
      start = now;
   }
 }
@@ -651,30 +669,30 @@ void readChargeStatus()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if REMOTE
-void inputIO()
-{
-  static Debouncer swDebouncer0, swDebouncer1;
-  
-  bool b0 = !digitalRead( IOPIN0 );
-  if ( swDebouncer0.isDebounced( b0, 3 ) ) md.io0 = b0;
-  
-  bool b1 = !digitalRead( IOPIN1 );
-  if ( swDebouncer1.isDebounced( b1, 3 ) )
-  {
-    if ( b1 && dsp_md.io1 == md.io1 ) md.io1 = !md.io1;
-    if ( !b1 ) dsp_md.io1 = md.io1;
-  }
-}
-#endif
+//#if REMOTE
+//void inputIO()
+//{
+//  static Debouncer swDebouncer0, swDebouncer1;
+//  
+//  bool b0 = !digitalRead( IPIN0 );
+//  if ( swDebouncer0.isDebounced( b0, 3 ) ) md.io0 = b0;
+//  
+//  bool b1 = !digitalRead( IPIN1 );
+//  if ( swDebouncer1.isDebounced( b1, 3 ) )
+//  {
+//    if ( b1 && dsp_md.io1 == md.io1 ) md.io1 = !md.io1;
+//    if ( !b1 ) dsp_md.io1 = md.io1;
+//  }
+//}
+//#endif
 
-#if LOCOMOTIVE
-void outputIO()
-{ 
-  digitalWrite( IOPIN0, md.io0 );
-  digitalWrite( IOPIN1, md.io1 );
-}
-#endif
+//#if LOCOMOTIVE || STANDALONE
+//void outputRelay()
+//{ 
+//  digitalWrite( OPIN0, md.io0 );
+//  digitalWrite( OPIN1, md.io1 );
+//}
+//#endif
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -951,7 +969,7 @@ void selectMode()
     }
   }
 
- // Inactivity timer, set motor to neutral after some while with zero setpoint
+ // Inactivity timer, set motor to neutral after a while with zero setpoint
   tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 20000 ); // Start 20 second timer for inactivity
   if ( tempsZeroMarxa.value() ) md.motorMode = MotorModeStop; // Set motor mode to neutral
 
@@ -961,7 +979,32 @@ void selectMode()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// Changes the motor speed according to user input and motor states.
+// Updates input button states.
+void selectInputButtons()
+{
+  static Debouncer swDebouncer0, swDebouncer1;
+
+  bool authorize =
+         ( REMOTE && d.radioMode == RadioModeRemote ) ||
+         ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
+
+  if ( authorize )
+  {
+    bool b0 = !digitalRead( IPIN0 );
+    if ( swDebouncer0.isDebounced( b0, 3 ) ) md.button0 = b0;
+  
+    bool b1 = !digitalRead( IPIN1 );
+    if ( swDebouncer1.isDebounced( b1, 3 ) )
+    {
+      if ( b1 && dsp_md.button1 == md.button1 ) md.button1 = !md.button1;
+      if ( !b1 ) dsp_md.button1 = md.button1;
+    }
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Updates motor speed set-point according to user input and motor states.
 void selectMotorSpeed()
 {
   //Get the amount of steps the wheel has been rotated by the user
@@ -1037,8 +1080,26 @@ void selectConfigValue()
             default : break;        
           }
           varRefs[configVarIndex]->value = value;
-          if ( varRefs[configVarIndex] == &radioChannel ) radio.setChannel(value); // FIX ME: should we set it here right away or wait until save settings 
-          if ( varRefs[configVarIndex] == &radioPALevel ) radio.setPALevel(value); // FIX ME: should we set it here right away or wait until save settings
+          #if (!STANDALONE)
+          if ( varRefs[configVarIndex] == &radioChannel ) radio.setChannel(value); // FIX ME: should we set it right away here or wait until save settings 
+          if ( varRefs[configVarIndex] == &channelAddress ) 
+          {
+            remote_address[4] = value;
+            locomotive_address1[4] = value;
+            // FIX ME: should we set it right away here or wait until save settings
+            #if REMOTE
+               radio.openWritingPipe(remote_address);             // communicate back and forth. Remote listens, Locomotive talks.
+               radio.openReadingPipe(1, locomotive_address1);      // see starping example for multiple reading pipes (1 through 5 )
+              //radio.openReadingPipe(2, locomotive_address2);    // TO DO : uncomment and find a way to set it for double traction
+              radio.startListening();
+            #elif LOCOMOTIVE
+              radio.openWritingPipe(locomotive_address1);        // TO DO: find a way to set the right locomotive in case of double traction
+              radio.openReadingPipe(1, remote_address);          // use pipe 1 for reading from the remote
+            #endif
+          }
+          if ( varRefs[configVarIndex] == &radioPALevel ) radio.setPALevel(value); // FIX ME: should we set it right away here or wait until save settings
+          
+          #endif
         }
       }
     }
@@ -1051,6 +1112,15 @@ void selectConfigValue()
   if ( tempsConfig.value() ) md.motorMode = MotorModeStop, d.mainMode = MainModeDefault;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+#if !REMOTE
+void outputRelay()
+{ 
+  digitalWrite( OPIN0, md.button0 );
+  digitalWrite( OPIN1, md.button1 );
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1519,12 +1589,20 @@ void updateDisplayConfig( bool refresh )
       oled_printf( "%-12s", varRefs[varIndex]->description );
     }
 
-    if ( configOffset+ENDROW-1 == NUMVARS )
+//    if ( configOffset+ENDROW-1 == NUMVARS )
+//    { 
+//      // add the 'SAVE & EXIT' row
+//      oled.setCursor( NAMECOL, ENDROW-1 );
+//      oled_printf( "%-12s","GUARDAR" );  
+//      oled.clearField( VARCOL, ENDROW-1, 4 );
+//    }
+
+    if ( ENDROW-FIRSTROW+configOffset > NUMVARS )
     { 
       // add the 'SAVE & EXIT' row
-      oled.setCursor( NAMECOL, ENDROW-1 );
+      oled.setCursor( NAMECOL, FIRSTROW+NUMVARS-configOffset );
       oled_printf( "%-12s","GUARDAR" );  
-      oled.clearField( VARCOL, ENDROW-1, 4 );
+      oled.clearField( VARCOL, FIRSTROW+NUMVARS-configOffset, 4 );
     }
   }
   
