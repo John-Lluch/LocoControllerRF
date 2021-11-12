@@ -928,14 +928,13 @@ void selectMode()
   
     if ( md.motorMode == MotorModeStop )  // If motor mode is neutral:
     {
+      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to forward if button is pushed once
 //      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
 //      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
-      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to forward if button is pushed once
 
       if ( pbTime ) d.mainMode = MainModeConfig;                      // Open up config display if button is pushed and held
     }
     
-//    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) ) // If motor mode is not neutral:
     else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse || md.motorMode == MotorModeWait) ) // If motor mode is not neutral:
     {
       if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off motor and set the mode to neutral  // aqui
@@ -943,7 +942,6 @@ void selectMode()
   }
 
  // Inactivity timer, set motor to neutral after a while with zero setpoint
-//  tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 10000 ); // Start 10 second timer for inactivity
   tempsZeroMarxa.timer( ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0 ) || md.motorMode == MotorModeWait, 10000 ); // Start 10 second timer for inactivity
   if ( tempsZeroMarxa.value() ) md.motorMode = MotorModeStop; // Set motor mode to neutral
 
@@ -1051,45 +1049,6 @@ void selectMotorSpeed()
   
   if ( delta != 0 ) userAction = true; // An action has been performed by the user
 }
-
-
-
-//void selectMotorSpeed()
-//{
-//  //Get the amount of steps the wheel has been rotated by the user
-//  int delta = encoder.delta();
-//
-//  if ( d.mainMode == MainModeDefault )
-//  { 
-//    bool authorize =
-//          ( REMOTE && d.radioMode == RadioModeRemote ) ||
-//          ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
-// 
-//    if ( md.motorMode == MotorModeStop )
-//    {
-//      md.motorSetPoint = 0; //Shut down the motor
-//    }  
-//    
-//    else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When motor is running
-//    {
-//      if ( authorize && delta != 0 )
-//      {
-//        md.motorSetPoint = md.motorSetPoint + delta;          //Change the motor speed according to user input
-//        if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
-//        //if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
-//        int maxSetpoint = maxSpeedReverse.value ;
-//        if ( md.motorMode == MotorModeForward ) maxSetpoint = maxSpeedForward.value;
-//        if ( md.motorSetPoint > maxSetpoint ) md.motorSetPoint = maxSetpoint; //Avoid overflow
-//      }
-//    }
-//  }
-//  
-//  if ( delta != 0 ) userAction = true; // An action has been performed by the user
-//}
-
-
-
-
 
 
 ////////////////////////////////////////////////////////////////////////////////
