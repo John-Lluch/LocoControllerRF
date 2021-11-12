@@ -152,6 +152,7 @@ enum MotorMode
   MotorModeStop,
   MotorModeForward,
   MotorModeReverse,
+  MotorModeWait,
 };
 
 enum RadioMode
@@ -765,37 +766,6 @@ void readSabertooth()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if LOCOMOTIVE
-// Receive orders from the remote (RC) unit through ack payload
-void readFromRemote()
-{
-  static SWTimer radioTimer;
-  static SWKeep radioOk;
-
-  if ( d.radioMode == RadioModeRemote || d.radioMode == RadioModeRemoteError )
-  {
-    bool b = radio.available();
-    if ( b )
-    { 
-      radio.read(&md, sizeof(md));
-    
-      #if DEBUGA
-      Serial.println("Got Ack payload from remote");
-      #endif
-    }
-
-    radioTimer.timer( !b, 3000 );
-    
-    if ( radioOk.keep( b, radioTimer.value() ) ) d.radioMode = RadioModeRemote;
-    else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
-  }
-}
-
-#endif
-
-
-////////////////////////////////////////////////////////////////////////////////
-
 #if REMOTE
 //Receive data from the locomotive (Locomotive)
 void readFromLocomotive()
@@ -952,29 +922,64 @@ void selectMode()
 
   else if ( d.mainMode == MainModeDefault ) // Normal operation display
   {
-     bool autorize = 
+     bool autorize =   // Button will be responsible only for remote or standalone locomotive 
           ( REMOTE && d.radioMode == RadioModeRemote ) ||
           ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
   
     if ( md.motorMode == MotorModeStop )  // If motor mode is neutral:
     {
-      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
-      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
+//      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
+//      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
+      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to forward if button is pushed once
+
       if ( pbTime ) d.mainMode = MainModeConfig;                      // Open up config display if button is pushed and held
     }
     
-    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) ) // If motor mode is not neutral:
+//    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) ) // If motor mode is not neutral:
+    else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse || md.motorMode == MotorModeWait) ) // If motor mode is not neutral:
     {
       if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off motor and set the mode to neutral  // aqui
     }
   }
 
  // Inactivity timer, set motor to neutral after a while with zero setpoint
-  tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 20000 ); // Start 20 second timer for inactivity
+//  tempsZeroMarxa.timer( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0, 10000 ); // Start 10 second timer for inactivity
+  tempsZeroMarxa.timer( ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse) && md.motorSetPoint == 0 ) || md.motorMode == MotorModeWait, 10000 ); // Start 10 second timer for inactivity
   if ( tempsZeroMarxa.value() ) md.motorMode = MotorModeStop; // Set motor mode to neutral
 
   if ( finite != 0 ) userAction = true; // Action has been performed by the user
 }
+
+
+////////////////////////////////////////////////////////////////////////////////
+
+#if LOCOMOTIVE
+// Receive orders from the remote (RC) unit through ack payload
+void readFromRemote()
+{
+  static SWTimer radioTimer;
+  static SWKeep radioOk;
+
+  if ( d.radioMode == RadioModeRemote || d.radioMode == RadioModeRemoteError )
+  {
+    bool b = radio.available();
+    if ( b )
+    { 
+      radio.read(&md, sizeof(md));
+    
+      #if DEBUGA
+      Serial.println("Got Ack payload from remote");
+      #endif
+    }
+
+    radioTimer.timer( !b, 3000 );
+    
+    if ( radioOk.keep( b, radioTimer.value() ) ) d.radioMode = RadioModeRemote;
+    else if ( d.radioMode == RadioModeRemote ) d.radioMode = RadioModeRemoteError, md.motorMode = MotorModeStop;
+  }
+}
+
+#endif
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1020,12 +1025,21 @@ void selectMotorSpeed()
     {
       md.motorSetPoint = 0; //Shut down the motor
     }  
-    
-    else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When motor is running
+
+    if ( md.motorMode == MotorModeWait ) // When motor is waiting for direction
     {
       if ( authorize && delta != 0 )
       {
-        md.motorSetPoint = md.motorSetPoint + delta;          //Change the motor speed according to user input
+        if ( delta > 0 ) md.motorMode = MotorModeForward;
+        if ( delta < 0 ) md.motorMode = MotorModeReverse;
+      }
+    }
+    
+    if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When motor is running
+    {
+      if ( authorize && delta != 0 )
+      {
+        md.motorSetPoint = md.motorSetPoint + (md.motorMode == MotorModeReverse?-delta:delta); //Change the motor speed according to user input
         if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
         //if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
         int maxSetpoint = maxSpeedReverse.value ;
@@ -1037,6 +1051,46 @@ void selectMotorSpeed()
   
   if ( delta != 0 ) userAction = true; // An action has been performed by the user
 }
+
+
+
+//void selectMotorSpeed()
+//{
+//  //Get the amount of steps the wheel has been rotated by the user
+//  int delta = encoder.delta();
+//
+//  if ( d.mainMode == MainModeDefault )
+//  { 
+//    bool authorize =
+//          ( REMOTE && d.radioMode == RadioModeRemote ) ||
+//          ( LOCOMOTIVE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal) );
+// 
+//    if ( md.motorMode == MotorModeStop )
+//    {
+//      md.motorSetPoint = 0; //Shut down the motor
+//    }  
+//    
+//    else if ( md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse ) //When motor is running
+//    {
+//      if ( authorize && delta != 0 )
+//      {
+//        md.motorSetPoint = md.motorSetPoint + delta;          //Change the motor speed according to user input
+//        if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
+//        //if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
+//        int maxSetpoint = maxSpeedReverse.value ;
+//        if ( md.motorMode == MotorModeForward ) maxSetpoint = maxSpeedForward.value;
+//        if ( md.motorSetPoint > maxSetpoint ) md.motorSetPoint = maxSetpoint; //Avoid overflow
+//      }
+//    }
+//  }
+//  
+//  if ( delta != 0 ) userAction = true; // An action has been performed by the user
+//}
+
+
+
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1527,14 +1581,16 @@ void updateDisplayDefault( bool refresh )
       dsp_md.motorMode = md.motorMode; 
       switch ( md.motorMode )
       {
+        case MotorModeStop : status = '0'; break;
         case MotorModeForward : status = '1'; break;
         case MotorModeReverse : status = '2'; break;
-        default: status = '0'; break;
+        default: status = 0;
       }
     
       oled.setFont(Symbol_24x24);
       oled.setCursor( POTCOL+POTWIDTH/2, POTROW );
-      oled.print( status );
+      if ( status ) oled.print( status );
+      else oled.clearField( POTCOL+POTWIDTH/2, POTROW, 1 );
     }
   }
 }
