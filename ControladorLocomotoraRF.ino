@@ -40,7 +40,9 @@ USBSabertooth ST(C, 128); // create a Sabertooth
 RF24 radio(CE_PIN, CS_PIN); // create a Radio
 uint8_t remote_address[] = {"remot"};  // define remote identifier
 uint8_t locomotive_address1[]  = {"loco1"};  // define locomotive identifier
-const uint8_t locomotive_address2[]  = {"moco1"};  // define locomotive identifier
+uint8_t locomotive_address2[]  = {"moco1"};  // define locomotive identifier (Only the first character must be different between locos)
+// NOTE: On the addresses above, the first character (LSB) must be different for each channel,
+// the remaining 4 characters must be all equal and they represent an unique communication address 
 #endif
 
 //
@@ -372,6 +374,7 @@ void setup()
   radio.setChannel( radioChannel.value );            // Using channel 80 by default
   remote_address[4] = channelAddress.value;
   locomotive_address1[4] = channelAddress.value;
+  locomotive_address2[4] = channelAddress.value;
   #if REMOTE
     radio.openWritingPipe(remote_address);             // communicate back and forth. Remote listens, Locomotive talks.
     radio.openReadingPipe(1, locomotive_address1);      // see starping example for multiple reading pipes (1 through 5 )
@@ -379,7 +382,8 @@ void setup()
     radio.startListening();
   #elif LOCOMOTIVE
     radio.openWritingPipe(locomotive_address1);        // TO DO: find a way to set the right locomotive in case of double traction
-    radio.openReadingPipe(1, remote_address);          // use pipe 1 for reading from the remote
+    radio.openReadingPipe(1, remote_address);          // use pipe 1 so all 5 byte address bytes are set for reading from the remote
+    radio.stopListening();
   #endif
 
 #endif
@@ -1169,12 +1173,15 @@ void sendMotorSpeed()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if LOCOMOTIVE
+
+#define RADIO_POLL_TIME 10
+
 // Send data to remote (RC) device
 void writeToRemote()
 {
   unsigned long now = millis();
   static unsigned long then = 0;
-  if ( now - then  > 100 )
+  if ( now - then  > RADIO_POLL_TIME )
   {
     then = now;
 
@@ -1192,23 +1199,34 @@ void writeToRemote()
 ////////////////////////////////////////////////////////////////////////////////
 
 #if REMOTE
+
 // Send commands to locomotive (Locomotive) device as an ack payload
 void writeToLocomotive()
 {
-  unsigned long now = millis();
-  static unsigned long then = 0;
-  if ( now - then  > 100 )
-  {
-    then = now;
+  radio.flush_tx();
+  radio.writeAckPayload( 1, &md, sizeof(md) );    
     
-    radio.flush_tx();
-    radio.writeAckPayload( 1, &md, sizeof(md) );    
-    
-    #if DEGUGA
-    Serial.println( "Wrote ack payload for Locomotive");
-    #endif
-  }
+  #if DEGUGA
+  Serial.println( "Wrote ack payload for Locomotive");
+  #endif
 }
+
+//void writeToLocomotive()
+//{
+//  unsigned long now = millis();
+//  static unsigned long then = 0;
+//  if ( now - then  > RADIO_POLL_TIME )
+//  {
+//    then = now;
+//    
+//    radio.flush_tx();
+//    radio.writeAckPayload( 1, &md, sizeof(md) );    
+//    
+//    #if DEGUGA
+//    Serial.println( "Wrote ack payload for Locomotive");
+//    #endif
+//  }
+//}
 
 #endif
 
