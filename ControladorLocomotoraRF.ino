@@ -10,8 +10,8 @@
 
 
 //Set both remote and locomotive to 0 to disable radio
-#define REMOTE 1
-#define LOCOMOTIVE 0
+#define REMOTE 0
+#define LOCOMOTIVE 1
 
 #define DEBUGA 0  //Debug flag
 
@@ -932,7 +932,7 @@ void selectMode()
   
     if ( md.motorMode == MotorModeStop )  // If motor mode is neutral:
     {
-      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to forward if button is pushed once
+      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to wait if button is pushed once
 //      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
 //      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
 
@@ -941,7 +941,7 @@ void selectMode()
     
     else if ( (md.motorMode == MotorModeForward || md.motorMode == MotorModeReverse || md.motorMode == MotorModeWait) ) // If motor mode is not neutral:
     {
-      if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off motor and set the mode to neutral  // aqui
+      if ( pbOneStrong || pbTwo ) md.motorMode = MotorModeStop; // Turn off motor and set the mode to neutral
     }
   }
 
@@ -1154,9 +1154,10 @@ void sendMotorSpeed()
   preMotorSetpoint = md.motorSetPoint;
   timMotor.timer( !sendNow, 1000 );
   
-  if ( sendNow ) // aqui
+  if ( sendNow )
   {   
-    int sign = 1;
+    int sign = 0;
+    if ( md.motorMode == MotorModeForward ) sign = 1;
     if ( md.motorMode == MotorModeReverse ) sign = -1;
     ST.freewheel( '*', md.motorMode == MotorModeStop ); // Turn on freewheeling when mode is Stop.
     ST.motor    ( '*', (2047L*md.motorSetPoint*speedLimit.value)/10000L * sign ); // Set both motor speeds
@@ -1164,6 +1165,8 @@ void sendMotorSpeed()
     Serial.print( "MotorSpeed: " );
     Serial.println( md.motorSetPoint );
 #endif
+    ST.power( 1, md.motorMode == MotorModeForward ? 2047 : -2047 ) ;  // Set power output acording to motor direction
+    ST.power( 2, md.motorMode == MotorModeReverse ? 2047 : -2047 ) ;  // Set power output acording to motor direction
   }
 }
 
