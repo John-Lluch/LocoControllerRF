@@ -10,8 +10,8 @@
 
 
 //Set both remote and locomotive to 0 to disable radio
-#define REMOTE 0
-#define LOCOMOTIVE 1
+#define REMOTE 1
+#define LOCOMOTIVE 0
 
 #define DEBUGA 0  //Debug flag
 
@@ -255,14 +255,15 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100
  ConfigOption maxSpeedForward   (OptionTypeShift, 100, 0, 100,  "Max Endavant",'3');
  ConfigOption maxSpeedReverse   (OptionTypeShift, 100, 0, 100,  "Max Enrera",  '3');
  #if !REMOTE
- ConfigOption speedLimit        (OptionTypeShift, 100, 0, 100, "Limit Veloc", '3');
+ ConfigOption speedLimit        (OptionTypeShift, 100, 0, 100,  "Limit Veloc", '3');
  #endif
- ConfigOption dummyDisplay3     (OptionTypeShift, 20, 0, 32, "Dummy3", '3');
- ConfigOption dummyDisplay4     (OptionTypeShift, 20, 0, 32, "Dummy4", '3');
- ConfigOption dummyDisplay5     (OptionTypeShift, 20, 0, 32, "Dummy5", '3');
- ConfigOption dummyDisplay6     (OptionTypeShift, 20, 0, 32, "Dummy6", '3');
- ConfigOption dummyDisplay7     (OptionTypeShift, 20, 0, 32, "Dummy7", '3');
- ConfigOption dummyDisplay8     (OptionTypeShift, 20, 0, 32, "Dummy8", '3');
+ ConfigOption naturalControl    (OptionTypeShift,   0, 0, 1,    "Ctrl Natural",'1'); 
+// ConfigOption dummyDisplay3     (OptionTypeShift, 20, 0, 32, "Dummy3", '3');
+// ConfigOption dummyDisplay4     (OptionTypeShift, 20, 0, 32, "Dummy4", '3');
+// ConfigOption dummyDisplay5     (OptionTypeShift, 20, 0, 32, "Dummy5", '3');
+// ConfigOption dummyDisplay6     (OptionTypeShift, 20, 0, 32, "Dummy6", '3');
+// ConfigOption dummyDisplay7     (OptionTypeShift, 20, 0, 32, "Dummy7", '3');
+// ConfigOption dummyDisplay8     (OptionTypeShift, 20, 0, 32, "Dummy8", '3');
 // ConfigOption smoothThrottle(OptionTypeBool,0,"Accel. suau");
 
 
@@ -277,6 +278,7 @@ SelfData dsp_d( MainModeNone, RadioModeNone, ConfigModeNone, ScreenModeNone, 100
  #if !REMOTE
     &speedLimit,
  #endif 
+    &naturalControl,
 // &dummyDisplay3, 
 // &dummyDisplay4, 
 // &dummyDisplay5, &dummyDisplay6, &dummyDisplay7, &dummyDisplay8
@@ -932,9 +934,15 @@ void selectMode()
   
     if ( md.motorMode == MotorModeStop )  // If motor mode is neutral:
     {
-      if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to wait if button is pushed once
-//      if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
-//      if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
+      if ( naturalControl.value == 0 )
+      {
+        if ( pbOneStrong && autorize ) md.motorMode = MotorModeWait; // Set motor mode to wait if button is pushed once
+      }
+      else
+      {
+        if ( pbOneStrong && autorize ) md.motorMode = MotorModeForward; // Set motor mode to forward if button is pushed once
+        if ( pbTwo && autorize ) md.motorMode = MotorModeReverse;       // Set motor mode to reverse if button is pushed twice
+      }
 
       if ( pbTime ) d.mainMode = MainModeConfig;                      // Open up config display if button is pushed and held
     }
@@ -1041,7 +1049,9 @@ void selectMotorSpeed()
     {
       if ( authorize && delta != 0 )
       {
-        md.motorSetPoint = md.motorSetPoint + (md.motorMode == MotorModeReverse?-delta:delta); //Change the motor speed according to user input
+        int efectiveDelta = delta;
+        if ( naturalControl.value == 0 ) efectiveDelta = (md.motorMode == MotorModeReverse?-delta:delta);
+        md.motorSetPoint = md.motorSetPoint + efectiveDelta; //Change the motor speed according to user input
         if ( md.motorSetPoint < 0 ) md.motorSetPoint = 0;     //Avoid underflow
         //if ( md.motorSetPoint > 100 ) md.motorSetPoint = 100; //Avoid overflow
         int maxSetpoint = maxSpeedReverse.value ;
@@ -1362,7 +1372,7 @@ void updateDisplayDefault( bool refresh )
   refresh = refresh || (REMOTE && radioChanged) ;
   bool showError = REMOTE && (d.radioMode == RadioModeRemoteError || d.radioMode == RadioModeLocal);
 
-  // Charge levelis always displayed
+  // Charge levels always displayed
   #if REMOTE
 
   if (dsp_d.battIsCharging != d.battIsCharging || refresh )
